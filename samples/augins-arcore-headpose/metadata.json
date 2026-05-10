@@ -1,0 +1,12 @@
+{
+    "Name": "Aug-Ins ARCore Head Pose",
+    "ID": "com.augmented_insanity.samples.arcore_headpose",
+    "Version": "0.1.0",
+    "Description": "Provides head pose via Google ARCore. Hooks xrLocateSpace(view, base=local) and writes the ARCore-tracked pose into the IPC reply. Requires Google Play Services for AR installed on the device.",
+    "Advertised_Extensions": [],
+    "Implemented_Functions": [
+        "aug_spaceCreateSemanticIds",
+        "xrLocateSpace",
+        "aug_deviceGetTrackedPose"
+    ]
+}

@@ -1,0 +1,8 @@
+# Copyright 2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
+# SPDX-License-Identifier: GPL-3.0-or-later
+blank_issues_enabled: false
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/yepistream/Augmented-Insanity/discussions
+    about: Open-ended questions belong in Discussions, not Issues. Use the bug
+      report or feature request templates for actionable items.

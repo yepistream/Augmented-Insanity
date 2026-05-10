@@ -1,0 +1,65 @@
+// Copyright 2020-2022, Collabora, Ltd.
+// Copyright 2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+pluginManagement {
+
+    repositories {
+        gradlePluginPortal()
+        google()
+        mavenCentral()
+    }
+}
+
+dependencyResolutionManagement {
+
+    // This triggers an error if any individual project tries to add a repo not listed here.
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+        maven { url 'https://jitpack.io' }
+    }
+}
+
+
+rootProject.name = 'monado'
+
+// Typically required by all Monado-based runtimes on AOSP platforms
+include ':src:xrt:auxiliary'
+project(':src:xrt:auxiliary').projectDir = new File(rootDir, 'src/xrt/auxiliary/android')
+
+// Only used by Google Cardboard support in the installable Monado
+include ':src:xrt:auxiliary:cardboard'
+project(':src:xrt:auxiliary:cardboard').projectDir = new File(rootDir, 'src/xrt/auxiliary/android_cardboard')
+
+// Required for out-of-process builds
+include ':src:xrt:ipc'
+project(':src:xrt:ipc').projectDir = new File(rootDir, 'src/xrt/ipc/android')
+
+// Typically required by all Monado-based runtimes on AOSP platforms
+// Use dependency injection to customize
+include ':src:xrt:targets:android_common'
+
+// End-level (leaf) target - builds on android_common with dependency injection
+// to make an installable APK providing a runtime with a Cardboard-like experience
+// by default.
+include ':src:xrt:targets:openxr_android'
+
+// Aug-Ins sample modules. These build .augins packages outside the APK flow
+// and are only relevant when XRT_FEATURE_AUG_INS is on; including here so
+// `gradlew :samples:augins-noop:installNoopAugins` works from the repo root.
+include ':samples:augins-noop'
+project(':samples:augins-noop').projectDir = new File(rootDir, 'samples/augins-noop')
+
+include ':samples:augins-arcore-headpose'
+project(':samples:augins-arcore-headpose').projectDir = new File(rootDir, 'samples/augins-arcore-headpose')
+
+include ':samples:augins-mercury-handtracking-arcore'
+project(':samples:augins-mercury-handtracking-arcore').projectDir = new File(rootDir, 'samples/augins-mercury-handtracking-arcore')
+
+// Featured tutorial module. Self-contained (no external SDKs); see
+// module-example/augins-head-sway/README.md and
+// docs/wiki/Module-Example-Walkthrough.md.
+include ':module-example:augins-head-sway'
+project(':module-example:augins-head-sway').projectDir = new File(rootDir, 'module-example/augins-head-sway')

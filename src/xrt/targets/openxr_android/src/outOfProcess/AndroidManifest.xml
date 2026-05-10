@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Copyright 2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
+  SPDX-License-Identifier: GPL-3.0-or-later
+
+  outOfProcess flavor overlay: registers the Aug-Ins test activity as the
+  launcher and strips the LAUNCHER intent from the inherited AboutActivity so
+  there's only one icon on the home screen.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Camera access for ARCore pose tracking (used by augins-arcore-headpose module) -->
+    <uses-permission android:name="android.permission.CAMERA" />
+
+    <!-- ARCore requires a camera with AR capabilities -->
+    <uses-feature
+        android:name="android.hardware.camera.ar"
+        android:required="false" />
+
+    <!--
+      "required" tells the Play Store this app needs ARCore installed.
+      Use "optional" if ARCore modules are not always present.
+      We set "optional" here so the APK installs on non-AR devices too;
+      the arcore-headpose module gracefully aborts if ARCore is unavailable.
+    -->
+    <meta-data
+        android:name="com.google.ar.core"
+        android:value="optional" />
+
+    <application>
+
+        <activity
+            android:name="com.augmented_insanity.runtime.AugInsTestActivity"
+            android:exported="true"
+            android:label="@string/augins_title"
+            android:theme="@style/AppTheme">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          Remove the LAUNCHER intent from the inherited About activity so we
+          don't ship two launcher icons.
+        -->
+        <activity
+            android:name="org.freedesktop.monado.android_common.AboutActivity"
+            tools:node="merge">
+            <intent-filter tools:node="removeAll" />
+        </activity>
+    </application>
+</manifest>

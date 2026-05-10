@@ -1,0 +1,15 @@
+{
+    "Name": "Aug-Ins Head-Sway Example",
+    "ID": "com.augmented_insanity.examples.head_sway",
+    "Version": "0.1.0",
+    "Description": "Tutorial module. Adds a sinusoidal X-axis offset to the head pose returned by aug_deviceGetTrackedPose, producing an obvious side-to-side swaying motion of the rendered scene. See module-example/augins-head-sway/README.md.",
+    "Dependencies": [],
+    "Advertised_OpenXR_Features": {
+        "Extensions": [],
+        "InteractionProfiles": [],
+        "SystemPropertyBits": []
+    },
+    "Implemented_Functions": [
+        "aug_deviceGetTrackedPose"
+    ]
+}

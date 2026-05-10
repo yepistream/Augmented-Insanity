@@ -1,0 +1,35 @@
+Augmented Insanity is dual-licensed.
+
+This repository is a fork of Monado (https://gitlab.freedesktop.org/monado/monado).
+The original Monado source files preserved here, identifiable by their
+SPDX-License-Identifier headers, remain under their upstream licenses --
+predominantly the Boost Software License 1.0 (BSL-1.0). The full text of every
+license referenced by any file in this repository is available under LICENSES/.
+
+New files authored by Marko Kazimirovic <kazimirovicmarko@photon.me>, as well
+as substantive modifications to upstream files, are licensed under the GNU
+General Public License version 3.0 or later (GPL-3.0-or-later). The full text
+of GPL-3.0-or-later is available at LICENSES/GPL-3.0-or-later.txt.
+
+Per-file rule of thumb:
+
+  - A file's `SPDX-License-Identifier` header is the authoritative statement
+    of that file's license.
+  - Files entirely authored by Marko declare `GPL-3.0-or-later`.
+  - Files originally from upstream Monado that have been substantively
+    modified declare `GPL-3.0-or-later` as well; the original copyright lines
+    (Collabora, Khronos, individual contributors, etc.) are preserved per
+    BSL-1.0 terms, which permit relicensing.
+  - Files originally from upstream Monado that have not been substantively
+    modified retain their original SPDX identifier (typically BSL-1.0).
+  - Vendored third-party code (under `samples/*/vendor/`, `src/external/`)
+    retains its upstream license; do not assume GPL-3.0 applies there.
+
+When the work is distributed as a whole (binary or source archive), the
+combined work effectively follows GPL-3.0-or-later, because GPL is the more
+restrictive of the two licenses and propagates to the linked product. The
+BSL-1.0 portions remain individually distributable under their own terms when
+extracted in isolation.
+
+For a high-level summary of which subsystems were modified vs upstream Monado,
+see MODIFICATIONS.md at the repository root.

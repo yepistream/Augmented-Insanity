@@ -1,0 +1,95 @@
+// Copyright 2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
+// SPDX-License-Identifier: GPL-3.0-or-later
+//
+// Builds the Mercury (ARCore camera) hand-tracking sample .augins package.
+//
+//   gradlew :samples:augins-mercury-handtracking-arcore:packageMercuryArcoreAugins
+//   gradlew :samples:augins-mercury-handtracking-arcore:installMercuryArcoreAugins
+//
+// Unlike samples/augins-arcore-headpose, this module's .so is built by the
+// runtime's CMake invocation (so it can directly link Mercury's in-tree static
+// libs). This gradle subproject is a thin packager: it depends on the runtime
+// build, pulls the stripped .so out of its output directory, and zips it
+// together with the ONNX models + metadata into a .augins file.
+
+import java.util.Properties
+
+def localProps = new Properties()
+def localPropsFile = file("${rootDir}/local.properties")
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+
+def runtimePackageId = 'com.augmented_insanity.runtime.out_of_process'
+def moduleSoName     = 'com.augmented_insanity.samples.mercury_handtracking_arcore.so'
+def augInsFileName   = 'mercury-handtracking-arcore.augins'
+
+// The runtime's stripped-libs output. AGP guarantees this path is stable
+// (no per-config hash) for a given flavor + build type.
+def runtimeProj = project(':src:xrt:targets:openxr_android')
+def runtimeStrippedDir = runtimeProj.layout.buildDirectory.dir(
+    'intermediates/stripped_native_libs/outOfProcessDebug/' +
+    'stripOutOfProcessDebugDebugSymbols/out/lib/arm64-v8a')
+
+def augInsFile = layout.buildDirectory.file(augInsFileName).get().asFile
+
+// ONNX hand-tracking models. Override location with -PhandTrackingModelsDir if
+// you've stashed them somewhere else; defaults to the user's local layout.
+def modelsDir = project.findProperty('handTrackingModelsDir') ?:
+        'D:/xr-deps/hand-tracking-models'
+
+tasks.register('packageMercuryArcoreAugins', Zip) {
+    // Force the runtime native libs to be built (and stripped) before we zip.
+    dependsOn ':src:xrt:targets:openxr_android:assembleOutOfProcessDebug'
+
+    archiveFileName = augInsFileName
+    destinationDirectory = layout.buildDirectory
+
+    // The runtime build puts the stripped module .so here.
+    from(runtimeStrippedDir) {
+        include moduleSoName
+    }
+    // ONNX models Ã¢â‚¬â€ Mercury's ht_driver loads these via the path passed in
+    // ht_device_create. The module's mercury_arcore_module.cpp must look for
+    // them in the per-module data dir at runtime (host API
+    // get_module_data_dir() returns the .augins extraction dir).
+    from(modelsDir) {
+        include 'grayscale_detection_160x160.onnx', 'grayscale_keypoint_jan18.onnx'
+        // Place them in a "models/" subdir inside the zip for clarity.
+        into 'models'
+    }
+    from('.') {
+        include 'metadata.json', 'settings.json'
+    }
+    // LICENSE-* files added once present.
+    from('.') {
+        include 'LICENSE-*'
+    }
+
+    doLast {
+        println "Packaged ${augInsFileName} (${augInsFile.length() / 1048576} MiB)"
+    }
+}
+
+tasks.register('installMercuryArcoreAugins') {
+    dependsOn 'packageMercuryArcoreAugins'
+
+    doLast {
+        def tmpRemote = "/data/local/tmp/${augInsFileName}"
+        exec { commandLine 'adb', 'push', augInsFile.absolutePath, tmpRemote }
+        exec {
+            commandLine 'adb', 'shell',
+                "run-as ${runtimePackageId} mkdir -p files/modules"
+        }
+        exec {
+            commandLine 'adb', 'shell',
+                "run-as ${runtimePackageId} cp ${tmpRemote} files/modules/${augInsFileName}"
+        }
+        exec { commandLine 'adb', 'shell', "rm ${tmpRemote}" }
+        println "Pushed ${augInsFileName} into ${runtimePackageId}/files/modules/"
+    }
+}
+
+tasks.register('clean') {
+    doLast { delete layout.buildDirectory }
+}

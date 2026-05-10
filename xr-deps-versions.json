@@ -1,0 +1,32 @@
+{
+    "_comment_top": "Pinned versions of external native dependencies fetched by scripts/fetch-xr-deps.{ps1,sh}. Bump here, not in the scripts. Files extract under xr-deps/<dep>/ relative to the repo root.",
+    "_comment_license": "License: this metadata file is GPL-3.0-or-later. The downloaded payloads retain their upstream licenses (Apache-2.0 for OpenCV, MIT for ONNX Runtime, BSL-1.0 for the hand-tracking models per upstream Monado).",
+
+    "opencv": {
+        "version": "4.13.0",
+        "url": "https://github.com/opencv/opencv/releases/download/4.13.0/opencv-4.13.0-android-sdk.zip",
+        "sha256": "",
+        "extract_to": "xr-deps/OpenCV-android-sdk",
+        "expected_marker": "xr-deps/OpenCV-android-sdk/sdk/native/libs/arm64-v8a/libopencv_java4.so"
+    },
+
+    "onnxruntime": {
+        "version": "1.17.0",
+        "url": "https://github.com/microsoft/onnxruntime/releases/download/v1.17.0/onnxruntime-android-1.17.0.aar",
+        "sha256": "",
+        "extract_to": "xr-deps/onnxruntime-aar",
+        "expected_marker": "xr-deps/onnxruntime-aar/jni/arm64-v8a/libonnxruntime.so"
+    },
+
+    "hand_tracking_models": {
+        "_comment": "Two ONNX files; cloned via git LFS from Collabora. If you hit LFS quota, mirror these to your own GitHub Release and edit the URLs.",
+        "version": "jan18",
+        "git_url": "https://gitlab.freedesktop.org/monado/utilities/hand-tracking-models.git",
+        "git_ref": "main",
+        "extract_to": "xr-deps/hand-tracking-models",
+        "expected_files": [
+            "xr-deps/hand-tracking-models/grayscale_detection_160x160.onnx",
+            "xr-deps/hand-tracking-models/grayscale_keypoint_jan18.onnx"
+        ]
+    }
+}
