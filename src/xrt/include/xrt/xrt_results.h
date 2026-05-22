@@ -34,7 +34,7 @@ typedef enum xrt_result
 	XRT_TIMEOUT = 2,
 
 	/*!
-	 * The spaceâ€™s bounds are not known at the moment.
+	 * The space’s bounds are not known at the moment.
 	 */
 	XRT_SPACE_BOUNDS_UNAVAILABLE = 3,
 

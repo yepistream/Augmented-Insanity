@@ -5,232 +5,260 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Building A Module
 
-How to write, build, and package a `.augins` module from scratch.
+From-scratch guide to authoring a `.augins` module. Reference
+samples in this repo:
 
-For a worked example with full source code, read
-[Module Example Walkthrough](Module-Example-Walkthrough.md) and look
-at `module-example/augins-head-sway/`.
+- `samples/augins-test-noop/` -- smallest possible module,
+  lifecycle hooks only, no dispatch.
+- `samples/augins-test-locate-space/` -- one dispatched function.
+- `samples/augins-arcore-headpose/` -- production module with a
+  worker thread and a vendored SDK.
 
-## Decide on the build mode
+The module build is separate from the runtime build. Modules use
+Gradle for orchestration (zip packaging, adb push, dependency
+tracking) but invoke `cmake` and `ninja` directly via `Exec`
+tasks. The Android Gradle Plugin's `lib*` `.so` naming would
+break the loader's `dlopen("<ID>.so", ...)`.
 
-Two patterns, depending on what your module needs:
+## Prerequisites
 
-### Pattern A: standalone NDK CMake (preferred)
+- Android NDK `26.3.11579264` and CMake `3.22.1` (same as the
+  runtime build).
+- The runtime's `src/xrt/augins/module_abi.h` header. Module
+  CMake adds `src/xrt/augins/` as an include directory.
 
-Use this when the module's only dependencies are:
+## Directory layout
 
-- The Android NDK (libc, liblog, libandroid).
-- The Aug-Ins module ABI header (`augins_module_abi.h`) and the
-  Monado `xrt/xrt_defines.h`.
-- Optionally one or two vendored third-party `.so` files (e.g.
-  the ARCore SDK's `libarcore_sdk_c.so`).
+Convention used by the bundled samples:
 
-The module builds **outside** the main Aug-Ins CMake invocation, in
-its own subdirectory, with its own CMakeLists.txt. The wrapping
-`build.gradle` invokes `cmake` and `ninja` directly via `Exec`
-tasks.
+```
+samples/my-module/
+  +-- build.gradle             # zip packaging + adb push
+  +-- CMakeLists.txt           # cmake build of the module .so
+  +-- metadata.json            # the manifest
+  +-- settings.json            # (optional, reserved for future use)
+  +-- my_module.cpp            # the module source
+  +-- vendor/                  # any third-party SDKs / .so files
+```
 
-Reference templates:
-- `samples/augins-noop/` -- minimum (no Monado headers needed).
-- `samples/augins-arcore-headpose/` -- adds vendored SDK and Monado
-  headers.
-- `module-example/augins-head-sway/` -- the smallest module that
-  uses `xrt_defines.h` and `augins_module_abi.h`.
+Plus a one-line entry in the root `settings.gradle`:
 
-### Pattern B: in-tree native target
+```groovy
+include ':samples:my-module'
+project(':samples:my-module').projectDir = new File(rootDir, 'samples/my-module')
+```
 
-Use this when the module needs to link against runtime-side libraries
-that are themselves part of the Monado tree. The classic case is
-Mercury hand tracking, which links against `t_ht_sync_mercury` and
-its OpenCV/ONNX support libraries.
+## `metadata.json`
 
-The module's `.so` is added as an `add_subdirectory(...)` from the
-runtime's top-level CMakeLists.txt and built alongside
-`augins-service.so`. The module's `build.gradle` is a thin Zip task
-that picks the stripped `.so` out of the runtime's
-`intermediates/stripped_native_libs/` and packages it.
-
-Reference template:
-- `samples/augins-mercury-handtracking-arcore/` -- complete in-tree
-  example with OpenCV+ONNX linkage.
-
-Pattern B is more invasive (the runtime build must know about your
-module) but avoids vendoring large libraries inside the `.augins`
-zip.
-
-## Manifest
-
-Every module ships a `metadata.json` at the root of the `.augins`
-zip. See [Manifest Schema](Manifest-Schema.md) for the full
-reference. Minimum:
+Required fields: `Manifest_Version`, `ID`, `Version`,
+`Implemented_Functions`.
 
 ```json
 {
-    "Name": "Your Module",
-    "ID": "com.example.your_module",
+    "Manifest_Version": 1,
+    "ID": "com.example.modules.my_module",
     "Version": "0.1.0",
-    "Description": "What your module does, in one paragraph.",
     "Implemented_Functions": []
 }
 ```
 
-If your module hooks IPC dispatches, list their names in
-`Implemented_Functions`. If your module advertises an OpenXR feature
-that needs a stub xdev, add the relevant
-`Advertised_OpenXR_Features.SystemPropertyBits` entry.
+An empty `Implemented_Functions` array is legal. The module
+loads, its lifecycle hooks fire, no IPC dispatch routes through
+it. This is the smallest configuration that exercises the loader.
 
-## Source
+Add OpenXR or `aug_*` names to `Implemented_Functions` as
+functions are implemented. See [Manifest-Schema](Manifest-Schema.md)
+for the full field reference.
 
-Module source is one or more C++ files. The minimum lifecycle is
-just `aug_onModuleLoad`:
+## `CMakeLists.txt`
 
-```cpp
-// my_module.cpp
-#include "augins_module_abi.h"
-#include <android/log.h>
-
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "MyModule", __VA_ARGS__)
-
-static const struct aug_host_api *g_host = nullptr;
-
-extern "C" void
-aug_onModuleLoad(void *args)
-{
-    const auto *api = static_cast<const struct aug_host_api *>(args);
-    if (api == nullptr || api->version < 1u) return;
-    g_host = api;
-    LOGI("MyModule loaded; host API v%u", api->version);
-}
-```
-
-Hooks are `extern "C"` symbols whose names match
-`Implemented_Functions`. Each takes the four-pointer signature:
-
-```cpp
-extern "C" int32_t
-xrLocateSpace(void *ics, void *msg, void *reply, void *unused)
-{
-    // read msg, write reply via g_host helpers, return AUG_OK
-    return AUG_OK;
-}
-```
-
-See [IPC Hook Dispatch](IPC-Hook-Dispatch.md) for the dispatch
-calling convention.
-
-## CMakeLists.txt (Pattern A)
-
-The output `.so` MUST be named exactly `<your-module-id>.so`, with no
-`lib` prefix, because the loader does `dlopen("<id>.so", ...)`. Use
-`set_target_properties`:
+The minimum to produce a correctly-named `.so`:
 
 ```cmake
 cmake_minimum_required(VERSION 3.22)
-project(my_module LANGUAGES CXX)
+project(my-module LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Reach into the runtime tree for the module ABI and Monado headers.
+# Path to the v0.2 public module ABI header.
 set(AUG_RUNTIME_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../../src/xrt/augins")
-set(XRT_PUBLIC_INCLUDE  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/xrt/include")
+set(OPENXR_INCLUDE      "${CMAKE_CURRENT_SOURCE_DIR}/../../src/external/openxr_includes")
 
 add_library(my_module SHARED my_module.cpp)
-target_include_directories(my_module PRIVATE
-    ${AUG_RUNTIME_INCLUDE}
-    ${XRT_PUBLIC_INCLUDE}
-    )
-target_link_libraries(my_module PRIVATE android log)
 
+target_include_directories(my_module PRIVATE
+    ${AUG_RUNTIME_INCLUDE}     # module_abi.h
+    ${OPENXR_INCLUDE}          # <openxr/openxr.h>
+    )
+
+target_link_libraries(my_module PRIVATE
+    log     # __android_log_print
+    )
+
+# Critical: the loader does dlopen("<ID from metadata.json>.so", ...).
+# Output filename must be exactly the manifest ID, with no "lib" prefix.
 set_target_properties(my_module PROPERTIES
     PREFIX ""
-    OUTPUT_NAME "com.example.my_module"
+    OUTPUT_NAME "com.example.modules.my_module"
     SUFFIX ".so"
     )
 ```
 
-## build.gradle (Pattern A)
+For vendored `.so` dependencies (e.g. the ARCore SDK's
+`libarcore_sdk_c.so`), import them as `SHARED IMPORTED` targets
+and add them to `target_link_libraries`. The runtime loader
+preloads sibling `.so` files in the zip with
+`RTLD_NOW | RTLD_GLOBAL` before `dlopen`ing the main module.
 
-A thin wrapper that runs `cmake` and `ninja` via Exec tasks, then
-zips the result. Copy `module-example/augins-head-sway/build.gradle`
-verbatim, search-and-replace the module name and ID.
+## `build.gradle`
 
-The interesting tasks are:
+The Gradle file:
 
-- `configure<Name>` -- runs `cmake -G Ninja ...`.
-- `build<Name>` -- runs `cmake --build ...`.
-- `package<Name>Augins` -- Zip task; produces
-  `build/<name>.augins`.
-- `install<Name>Augins` -- builds + adb-pushes onto a device via
-  `run-as`.
+1. Invokes `cmake -G Ninja` to configure the NDK build.
+2. Invokes `cmake --build` to compile.
+3. Zips the resulting `.so` plus `metadata.json` and any sibling
+   files into `<short-name>.augins`.
+4. Optionally pushes to the device via `adb`.
 
-## settings.gradle
+The sample `samples/augins-test-noop/build.gradle` is the
+template. Copy and rename the filenames.
 
-Add your module subproject to the root `settings.gradle`:
+## The module source
 
-```groovy
-include ':path:to:my-module'
-project(':path:to:my-module').projectDir = new File(rootDir, 'path/to/my-module')
+Minimal module that logs from the lifecycle hooks:
+
+```c
+#include "module_abi.h"
+#include <android/log.h>
+
+#define TAG "MyModule"
+#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
+
+static const struct aug_host_api *g_host = NULL;
+
+extern "C" {
+
+int aug_on_module_load(const struct aug_host_api *host)
+{
+    if (host == NULL || host->struct_version < AUG_HOST_API_VERSION) {
+        return 1; // reject
+    }
+    g_host = host;
+    LOGI("loaded: host API v%u, data_dir=%s",
+         host->struct_version, host->get_module_data_dir());
+    return 0;
+}
+
+void aug_on_module_unload(void)
+{
+    LOGI("unloaded");
+}
+
+} // extern "C"
 ```
 
-After this, your tasks are reachable from the repo root:
+Pushed to the device, this emits two log lines per service start
+and shutdown.
+
+## Adding a dispatchable function
+
+Example: override `xrLocateSpace` to return a sentinel pose.
+
+```c
+#include <openxr/openxr.h>
+
+extern "C" XRAPI_ATTR XrResult XRAPI_CALL
+xrLocateSpace(XrSpace space, XrSpace baseSpace, XrTime time,
+              XrSpaceLocation *location)
+{
+    if (location == NULL) {
+        return XR_ERROR_VALIDATION_FAILURE;
+    }
+    location->pose.position.x = 42.0f;
+    location->pose.position.y = 42.0f;
+    location->pose.position.z = 42.0f;
+    // leave orientation as-is
+    return XR_SUCCESS;
+}
+```
+
+Add the name to the manifest:
+
+```json
+"Implemented_Functions": ["xrLocateSpace"]
+```
+
+On next start the loader dlsyms `xrLocateSpace` from the module
+and the dispatcher routes `space_locate_space` IPC calls through
+it.
+
+Overriding a name that has no registered adapter is a runtime
+change, not a module change. The current
+`aug_implemented_adapters` set and the procedure for adding an
+entry are in [Service-Side-Dispatch](Service-Side-Dispatch.md).
+
+## Build, push, observe
 
 ```
-.\gradlew :path:to:my-module:packageMyModuleAugins
-.\gradlew :path:to:my-module:installMyModuleAugins
+.\gradlew.bat :samples:my-module:packageMyModuleAugins
+.\gradlew.bat :samples:my-module:installMyModuleAugins
 ```
 
-## Build and verify
+The first builds and zips. The second pushes and copies the file
+into `files/modules/` via `run-as`. Restart the runtime:
 
 ```
-.\gradlew :path:to:my-module:packageMyModuleAugins
-ls path/to/my-module/build/my-module.augins
-```
-
-Inspect the zip:
-
-```powershell
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-$arc = [System.IO.Compression.ZipFile]::OpenRead("path\to\my-module\build\my-module.augins")
-$arc.Entries | Format-Table FullName, Length
-$arc.Dispose()
-```
-
-Expected entries: `<module-id>.so`, `metadata.json`, optionally
-`settings.json`, `LICENSE.txt`, vendored `.so` siblings, etc.
-
-## Install on device
-
-```
-.\gradlew :path:to:my-module:installMyModuleAugins
 adb shell am force-stop com.augmented_insanity.runtime.out_of_process
+adb shell am start-foreground-service \
+  -a org.freedesktop.monado.ipc.CONNECT \
+  -n com.augmented_insanity.runtime.out_of_process/org.freedesktop.monado.ipc.MonadoService
 ```
 
-Watch logs:
+Tail the logs:
 
 ```
-adb logcat -s "Aug-Ins:*" "MyModule:*"
+adb logcat -s "Aug-Ins.Loader:V" "Aug-Ins.Lifecycle:V" \
+                 "Aug-Ins.Dispatch:V" "MyModule:V"
 ```
 
-You should see:
+The module shows as loaded and registered; when an OpenXR app
+calls the dispatched function the sentinel value appears.
+
+## Bundled assets
+
+For runtime files (ONNX models, calibration JSON, shaders), drop
+them into the project directory and include them in the `Zip`
+task's `from()` blocks. The loader extracts the zip into a
+per-module directory; modules read the path via
+`host->get_module_data_dir()` and append relative paths.
+
+Capture the path in `aug_on_module_load` for use from worker
+threads. See [Host-API-Reference](Host-API-Reference.md).
+
+## Worker threads
+
+Spawn in `aug_on_module_load`, join in `aug_on_module_unload`.
+The runtime calls the load hook on the service's main thread
+(already JVM-attached); workers that need JNI call
+`AttachCurrentThread` themselves and pair it with
+`DetachCurrentThread` at exit. Calling `DetachCurrentThread`
+from the load hook itself is a JNI fatal.
+
+## Zip layout
 
 ```
-Aug-Ins: Loaded module: <Your Module> (id=com.example.your_module, prio=50)
-MyModule: aug_onModuleLoad called; host API v2
+my-module.augins
+  +-- com.example.modules.my_module.so   # main module .so
+  +-- libfoo.so                          # any vendored .so
+  +-- metadata.json
+  +-- assets/                            # optional
+  +-- settings.json                      # optional
 ```
 
-## Common pitfalls
+Filename rules:
 
-- **`.so` filename has `lib` prefix.** The loader will `dlopen` the
-  expected name and fail. Set `PREFIX ""` in CMakeLists.
-- **`.so` filename does not match the manifest `ID`.** Same
-  failure mode. The two must be string-equal.
-- **Hook symbol not exported.** Wrap in `extern "C"` (a hook in
-  C++-mangled form is invisible to `dlsym`).
-- **Hook listed in manifest but not implemented in source.** The
-  loader logs a warning and skips it.
-- **Module advertises a system bit but never registers a producer
-  callback.** Stub xdev appears, every query returns `is_active =
-  false`. Either register the callback or drop the bit from the
-  manifest.
-- **Reading `get_module_data_dir()` from a worker thread.**
-  Returns empty string. Capture in `aug_onModuleLoad` and store.
+- The main `.so` must be exactly `<ID>.so` with no `lib` prefix.
+- `metadata.json` must be at the zip root.
+- Sibling `.so` files may keep the `lib` prefix; the loader
+  preloads them by whatever name they have in the extraction dir.

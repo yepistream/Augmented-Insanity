@@ -586,12 +586,9 @@ endif()
 add_subdirectory(src)
 add_subdirectory(doc)
 
-# Aug-Ins sample modules that need to link against in-tree static libs (e.g.
-# Mercury) live here. Each subdir guards itself with the relevant feature flag
-# so the sample is silently skipped when its deps are off.
-if(XRT_FEATURE_AUG_INS AND XRT_MODULE_MERCURY_HANDTRACKING)
-	add_subdirectory(samples/augins-mercury-handtracking-arcore)
-endif()
+# Phase 1 demolition (2026-05-19): samples/augins-mercury-handtracking-arcore
+# was removed. v0.2 service-side equivalents will be added back here when
+# the new module ABI is designed.
 
 if(BUILD_TESTING)
 	include(CTest)

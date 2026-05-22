@@ -64,9 +64,9 @@ struct t_image_boundary_circle
 enum t_camera_orientation
 {
 	CAMERA_ORIENTATION_0 = 0,     // Normal "horizontal" orientation
-	CAMERA_ORIENTATION_90 = 90,   // Camera rotated 90Â° to the right
-	CAMERA_ORIENTATION_180 = 180, // Camera rotated 180Â° upside down
-	CAMERA_ORIENTATION_270 = 270, // Camera rotated 270Â° to the left
+	CAMERA_ORIENTATION_90 = 90,   // Camera rotated 90 deg to the right
+	CAMERA_ORIENTATION_180 = 180, // Camera rotated 180 deg upside down
+	CAMERA_ORIENTATION_270 = 270, // Camera rotated 270 deg to the left
 };
 
 

@@ -261,8 +261,8 @@ def generate_server_c(file, p):
     # Hooks fire BEFORE ipc_send so modules can modify reply (output) fields.
     # Calling convention: augins_fire_hooks(xr_name, ics, msg, &reply, NULL)
     #   a0 = volatile struct ipc_client_state * (opaque session context)
-    #   a1 = IPC msg struct * Ã¢â‚¬â€ deserialized input args  (NULL if no in-args)
-    #   a2 = IPC reply struct * Ã¢â‚¬â€ writable output args   (NULL if no out-args)
+    #   a1 = IPC msg struct * -- deserialized input args  (NULL if no in-args)
+    #   a2 = IPC reply struct * -- writable output args   (NULL if no out-args)
     #   a3 = NULL (reserved)
     aug_ipc_to_xr = {
         "session_create":            "xrCreateSession",
@@ -282,21 +282,40 @@ def generate_server_c(file, p):
         "space_locate_space":        "xrLocateSpace",
         "space_locate_spaces":       "xrLocateSpaces",
         # space_locate_device backs xrLocateViews's "head device in base space"
-        # half (oxr_space_locate_device Ã¢â€ â€™ IPC). Same reply layout as
+        # half (oxr_space_locate_device -> IPC). Same reply layout as
         # space_locate_space (struct xrt_space_relation). Note: xrLocateViews
         # ALSO calls device_get_tracked_pose for the head's own-frame pose;
         # see below.
-        "space_locate_device":       "xrLocateViews",
-        # device_get_tracked_pose is the OTHER half of xrLocateViews Ã¢â‚¬â€ it
+        # space_locate_device backs xrLocateViews's T_base_xdev half on the
+        # service side. Module-facing name is synthetic (the OpenXR call this
+        # IPC partially backs is xrLocateViews, but xrLocateViews's full
+        # signature is not available at this IPC layer -- the client already
+        # decomposed it into per-device queries). Modules export
+        #   XrResult aug_LocateDeviceInSpace(XrSpace, XrTime, XrSpaceLocation*)
+        # The adapter filters to head-device queries only in v0.2 (see
+        # PROJECT_PLAN.md v0.2.x parking lot for non-head device roles).
+        "space_locate_device":       "aug_LocateDeviceInSpace",
+        # device_get_tracked_pose is the OTHER half of xrLocateViews -- it
         # populates T_xdev_head (the head's pose in the xdev's tracking-origin
         # space) which then gets composed with T_base_xdev. Without hooking
         # this, gyro+accel orientation leaks into the final view orientation
         # even when ARCore overrides the locate_device reply. Synthetic name
         # since this is a per-xdev internal helper, not a direct OpenXR fn.
         "device_get_tracked_pose":   "aug_deviceGetTrackedPose",
-        # Synthetic key Ã¢â‚¬â€ no OpenXR analogue; lets modules cache the canonical
+        # Synthetic key -- no OpenXR analogue; lets modules cache the canonical
         # reference-space IDs as soon as the client requests them.
         "space_create_semantic_ids": "aug_spaceCreateSemanticIds",
+    }
+
+    # Aug-Ins v0.2 service-side dispatch: which OpenXR function names
+    # have a hand-written adapter in src/xrt/augins/adapters.cpp.
+    # The codegen emits the dispatch fork only for these. As more
+    # adapters are added, append their names here. (Phase 2d first
+    # cut: just xrLocateSpace.) Codegen-from-schema for the adapter
+    # bodies themselves is a v0.2.x or v0.3 task; see PROJECT_PLAN.md.
+    aug_implemented_adapters = {
+        "xrLocateSpace",
+        "aug_LocateDeviceInSpace",
     }
 
     f = open(file, "w")
@@ -312,7 +331,8 @@ def generate_server_c(file, p):
 #include "ipc_server_generated.h"
 
 #ifdef XRT_FEATURE_AUG_INS
-#include "augins_dispatch.h"
+#include "dispatch.h"
+#include "adapters.h"
 #endif
 
 ''')
@@ -424,25 +444,40 @@ ipc_dispatch(volatile struct ipc_client_state *ics, ipc_command_t *ipc_command)
         if call.varlen:
             return_target = 'xrt_result_t xret'
 
-        write_invocation(f, return_target, 'ipc_handle_' +
-                         call.name, args, indent="\t\t")
-        f.write(";\n")
+        # Aug-Ins v0.2 dispatch fork:
+        # If this IPC call has an OpenXR-name mapping AND a hand-written
+        # adapter exists for that name, emit a conditional call that
+        # runs the adapter when modules are registered for the name,
+        # otherwise the original ipc_handle_<call>. Adapters take the
+        # SAME argument list as ipc_handle_<call> -- the adapter calls
+        # ipc_handle_<call> itself internally to fill the baseline, then
+        # iterates registered modules per the Q1 through Q5 rules.
+        # See src/xrt/augins/adapters.cpp.
+        #
+        # Varlen calls are skipped (no clean adapter pattern for streaming).
+        xr_name = aug_ipc_to_xr.get(call.name) if not call.varlen else None
+        has_adapter = xr_name is not None and xr_name in aug_implemented_adapters
+
+        if has_adapter:
+            f.write('\n#ifdef XRT_FEATURE_AUG_INS\n')
+            f.write('\t\tif (aug_has_modules_for("%s")) {\n' % xr_name)
+            write_invocation(f, return_target, 'aug_adapter_' + call.name,
+                             args, indent="\t\t\t")
+            f.write(";\n")
+            f.write('\t\t} else\n')
+            f.write('#endif\n')
+            f.write('\t\t{\n')
+            write_invocation(f, return_target, 'ipc_handle_' + call.name,
+                             args, indent="\t\t\t")
+            f.write(";\n")
+            f.write('\t\t}\n')
+        else:
+            write_invocation(f, return_target, 'ipc_handle_' +
+                             call.name, args, indent="\t\t")
+            f.write(";\n")
 
         # TODO do we check reply.result and
         # error out before replying if it's not success?
-
-        # Emit Aug-Ins hook call for mapped XR functions.
-        # Fires BEFORE ipc_send so modules can modify reply (output) args.
-        # Varlen calls are skipped (they do their own streaming I/O).
-        if not call.varlen:
-            xr_name = aug_ipc_to_xr.get(call.name)
-            if xr_name:
-                msg_arg = "(void *)msg" if call.needs_msg_struct else "NULL"
-                reply_arg = "(void *)&reply" if call.out_args else "NULL"
-                f.write("\n#ifdef XRT_FEATURE_AUG_INS\n")
-                f.write('\t\taugins_fire_hooks("%s", (void *)ics, %s, %s, NULL);\n'
-                        % (xr_name, msg_arg, reply_arg))
-                f.write("#endif\n")
 
         if not call.varlen:
             func = 'ipc_send'

@@ -3,54 +3,79 @@ Copyright 2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# Augmented Insanity Developer Wiki
+# Augmented Insanity Wiki
 
+Augmented Insanity is a fork of [Monado](https://gitlab.freedesktop.org/monado/monado)
+that adds a service-side module system. Modules are `.augins` zip
+packages dropped into the runtime APK's modules dir; the runtime
+discovers them at start, validates them, calls their lifecycle hooks,
+and routes selected OpenXR IPC calls through them via hand-written
+adapters.
 
-## Where to start
+This wiki is the developer-facing documentation. For a user-facing
+"install the APK and run an OpenXR app" walkthrough, see the repo
+[README](../../README.md).
 
-- **New to the project?** Read the
-  [Architecture Overview](Architecture-Overview.md) first.
-- **Want to write a module?** Skim
-  [Module System](Module-System.md), then walk through
-  [Module Example Walkthrough](Module-Example-Walkthrough.md) and start from
-  there.
-- **Want to contribute to the runtime/fork?** Read
-  [Architecture Overview](Architecture-Overview.md) and
-  [IPC Hook Dispatch](IPC-Hook-Dispatch.md), then
-  [Building The Runtime](Building-The-Runtime.md).
+Status: v0.2 `[WIP]`. The runtime, module loader, dispatch chain,
+and the ARCore head-pose module are working. Pages marked `[WIP]`
+or `[Planned]` document subsystems that do not yet exist or are
+incomplete.
 
-## Architecture and core systems
+---
 
-| Page | What it covers |
-|------|----------------|
-| [Architecture Overview](Architecture-Overview.md) | Runtime/module split, dispatch flow, ASCII diagram. |
-| [Module System](Module-System.md) | Module lifecycle, dependency resolution, three module roles. |
-| [Manifest Schema](Manifest-Schema.md) | Reference for `metadata.json`. |
-| [Host API Reference](Host-API-Reference.md) | The `aug_host_api` table. |
-| [IPC Hook Dispatch](IPC-Hook-Dispatch.md) | How `augins_fire_hooks` works, how to add a new hook. |
-| [Stub Xdev Factory](Stub-Xdev-Factory.md) `[WIP]` | How module-advertised features become `xrt_device` instances. |
-| [Camera Frame Broker](Camera-Frame-Broker.md) | Single-producer multiple-subscriber Y-plane broker. |
+## Index
 
-## Build and ship
+### Concepts
 
-| Page | What it covers |
-|------|----------------|
-| [Building The Runtime](Building-The-Runtime.md) | Android Studio prereqs, NDK 26, CMake 3.22, `xr-deps`, Gradle build, install via adb. |
-| [Building A Module](Building-A-Module.md) | Standalone NDK CMake vs in-tree builds. Manifest fields. Packaging into `.augins`. |
-| [Module Example Walkthrough](Module-Example-Walkthrough.md) | Line-by-line tour of `module-example/augins-head-sway/`. |
+- [Architecture-Overview](Architecture-Overview.md) -- client process,
+  service process, where modules live, how a call flows from
+  `xrLocateViews` to a module function.
+- [Module-System](Module-System.md) -- lifecycle hooks, dispatch
+  ordering (Q1 through Q5), `.augins` package format, what the
+  loader does at start.
+- [Service-Side-Dispatch](Service-Side-Dispatch.md) -- the
+  `proto.py` codegen and hand-written adapter pattern that route
+  IPC calls into modules.
 
-## Module references
+### Reference
 
-| Page | What it covers |
-|------|----------------|
-| [ARCore Module Reference](ARCore-Module-Reference.md) `[WIP]` | The `augins-arcore-headpose` module: hooks, broker producer, ARCore session ownership. |
-| [Mercury Module Reference](Mercury-Module-Reference.md) `[WIP]` | The `augins-mercury-handtracking-arcore` module: ONNX inference, lazy subscribe, frame decimation. |
-| [Calibration Activity](Calibration-Activity.md) `[NOT IMPLEMENTED]` | Planned per-module camera-intrinsics calibration UI. |
+- [Manifest-Schema](Manifest-Schema.md) -- `metadata.json` field by
+  field, with examples from the bundled ARCore module.
+- [Host-API-Reference](Host-API-Reference.md) -- the `aug_host_api`
+  v1 table modules receive in `aug_on_module_load`. Source of truth
+  is `src/xrt/augins/module_abi.h`.
 
-## Status, issues, roadmap
+### Building
 
-| Page | What it covers |
-|------|----------------|
-| [Implementation Status](Implementation-Status.md) | Single-table summary of what works. |
-| [Known Issues](Known-Issues.md) | Bugs I'm are aware of. |
-| [Roadmap](Roadmap.md) | What is planned, short to long term. |
+- [Building-The-Runtime](Building-The-Runtime.md) -- prerequisites,
+  Android Studio config, `gradlew assembleOutOfProcessDebug`, install
+  to device via adb.
+- [Building-A-Module](Building-A-Module.md) -- standalone NDK CMake
+  build of a `.augins` module, packaging task, push to device.
+- [Module-Example-Walkthrough](Module-Example-Walkthrough.md) --
+  annotated read-through of `module-example/augins-head-sway/`,
+  the head-sway tutorial module.
+
+### Modules
+
+- [ARCore-Module-Reference](ARCore-Module-Reference.md) -- the
+  bundled ARCore head-pose module. First production v0.2 module.
+
+### Project status
+
+- [Implementation-Status](Implementation-Status.md) -- single source
+  of truth: what works, what is `[WIP]`, what is `[Planned]`, what is
+  `[Broken]`.
+- [Known-Issues](Known-Issues.md) -- bugs and limitations I have
+  observed but not yet fixed.
+- [Roadmap](Roadmap.md) -- planned v0.2.x and v0.3+ work.
+
+### Credits
+
+- [Acknowledgements](Acknowledgements.md) -- upstream projects,
+  vendored libraries, and authors this fork depends on.
+
+---
+
+Wiki source is checked into the repo under `docs/wiki/`. The GitHub
+Wiki mirrors those files.

@@ -598,7 +598,6 @@ err_no_memory:
 static void
 crg_distortion_after_squash(struct render_gfx *render, const struct comp_render_dispatch_data *d)
 {
-
 	// Shared between all views.
 	VkSampler clamp_to_border_black = render->r->samplers.clamp_to_border_black;
 

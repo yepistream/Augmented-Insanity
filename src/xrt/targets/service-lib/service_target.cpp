@@ -26,8 +26,8 @@
 #include "xrt/xrt_config_build.h"
 
 #ifdef XRT_FEATURE_AUG_INS
-#include "augins_dispatch.h"
-#include "augins_lifecycle.h"
+#include "host_api.h"
+#include "loader.h"
 #endif
 
 #include <chrono>
@@ -63,16 +63,20 @@ public:
 		std::unique_lock lock(server_mutex);
 		if (!server && !server_thread) {
 #ifdef XRT_FEATURE_AUG_INS
-			// Launch the Aug-Ins GRS *before* the IPC server thread so the
-			// dispatch table and module lifecycle hooks are live by the time
-			// any client can connect. See design doc Ã‚Â§8 (Launching_STATE).
-			const char *modules_dir = android_globals_get_augins_modules_dir();
-			const char *cache_dir = android_globals_get_augins_cache_dir();
-			if (modules_dir && cache_dir) {
-				augins::launch(modules_dir, cache_dir);
-			} else {
-				U_LOG_W("Aug-Ins paths not set by Java side; skipping module load");
-			}
+			// Aug-Ins v0.2 service-side module loader. Phase 2a:
+			// the call below is a stub that logs and returns. Phase
+			// 2b fills in the real scan + dlopen. Either way, this
+			// has to fire BEFORE ipc_server_main_common spawns its
+			// dispatch threads so the dispatch registry is fully
+			// populated before any client can hit it.
+			//
+			// Paths come from the runtime APK Java side via the
+			// android_globals_*_augins_*_dir helpers (set during
+			// MonadoImpl's native init). Either may be NULL on a
+			// non-Android dev run; the loader tolerates that.
+			augins_loader_init(
+			    android_globals_get_augins_modules_dir(),
+			    android_globals_get_augins_cache_dir());
 #endif
 			server_thread =
 			    std::make_unique<std::thread>([&]() { ipc_server_main_common(&ismi, &callbacks, this); });
@@ -100,17 +104,13 @@ public:
 	static void
 	signalClientConnectedTrampoline(struct ipc_server *s, uint32_t client_id, void *data)
 	{
-#ifdef XRT_FEATURE_AUG_INS
-		augins::on_client_connecting();
-#endif
+		// v0.1 augins::on_client_connecting() removed in Phase 1 demolition.
 	}
 
 	static void
 	signalClientDisconnectedTrampoline(struct ipc_server *s, uint32_t client_id, void *data)
 	{
-#ifdef XRT_FEATURE_AUG_INS
-		augins::on_client_disconnecting();
-#endif
+		// v0.1 augins::on_client_disconnecting() removed in Phase 1 demolition.
 	}
 
 	int32_t
@@ -228,6 +228,14 @@ Java_org_freedesktop_monado_ipc_MonadoImpl_nativeStartServer(JNIEnv *env, jobjec
 
 	android_globals_store_vm_and_context(jvm, context);
 
+#ifdef XRT_FEATURE_AUG_INS
+	// Hand JVM/Context to the Aug-Ins host API so modules can call
+	// host->get_jvm() / host->get_context() from aug_on_module_load.
+	// Done before startServer() so the loader sees them populated.
+	augins_host_api_set_jvm_ctx(static_cast<void *>(jvm),
+	                            static_cast<void *>(context));
+#endif
+
 	IpcServerHelper::instance().startServer();
 }
 
@@ -265,20 +273,30 @@ Java_org_freedesktop_monado_ipc_MonadoImpl_nativeShutdownServer(JNIEnv *env, job
 
 	jint ret = IpcServerHelper::instance().shutdownServer();
 #ifdef XRT_FEATURE_AUG_INS
-	augins::shutdown();
+	// Tear down loaded modules (lifecycle unload + dlclose) AFTER the
+	// IPC server has stopped accepting new client traffic and the
+	// dispatch threads have joined, so no module function is mid-call
+	// when its .so gets unmapped.
+	augins_loader_shutdown();
 #endif
 	return ret;
 }
 
-#ifdef XRT_FEATURE_AUG_INS
-
 // ---------------------------------------------------------------------------
 // Aug-Ins diagnostic JNI bridge.
+//
+// Phase 1 demolition (2026-05-19): the v0.1 augins_status_*() backing
+// functions have been deleted. These JNI implementations are stubbed
+// to return zero/empty so AugInsBridge.kt + AugInsTestActivity.kt
+// still load and link without UnsatisfiedLinkError. The Activity will
+// just display "no modules". v0.2 service-side will reintroduce real
+// status accessors at this position.
+// (Original header comment block follows; left intact for context.)
 //
 // Backs com.augmented_insanity.runtime.AugInsBridge in the openxr_android
 // module. The Activity calls these to render the runtime state in a debug UI
 // without going through the OpenXR/IPC path. All methods are safe to call
-// before augins::launch Ã¢â‚¬â€ they return zero/empty until the GRS comes up.
+// before augins::launch -- they return zero/empty until the GRS comes up.
 // ---------------------------------------------------------------------------
 
 static jstring
@@ -290,56 +308,41 @@ to_jstring(JNIEnv *env, const char *s)
 extern "C" JNIEXPORT jint JNICALL
 Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetState(JNIEnv * /*env*/, jclass /*cls*/)
 {
-	return augins_status_state();
+	return -1; // Unknown state (was augins::state_t)
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleCount(JNIEnv * /*env*/,
-                                                                       jclass /*cls*/)
+Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleCount(JNIEnv * /*env*/, jclass /*cls*/)
 {
-	return static_cast<jint>(augins_status_module_count());
+	return 0;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleName(JNIEnv *env,
-                                                                      jclass /*cls*/,
-                                                                      jint index)
+Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleName(JNIEnv *env, jclass /*cls*/, jint /*index*/)
 {
-	return to_jstring(env, augins_status_module_name(static_cast<size_t>(index)));
+	return to_jstring(env, "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleId(JNIEnv *env,
-                                                                    jclass /*cls*/,
-                                                                    jint index)
+Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleId(JNIEnv *env, jclass /*cls*/, jint /*index*/)
 {
-	return to_jstring(env, augins_status_module_id(static_cast<size_t>(index)));
+	return to_jstring(env, "");
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleVersion(JNIEnv *env,
-                                                                         jclass /*cls*/,
-                                                                         jint index)
+Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleVersion(JNIEnv *env, jclass /*cls*/, jint /*index*/)
 {
-	return to_jstring(env, augins_status_module_version(static_cast<size_t>(index)));
+	return to_jstring(env, "");
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleFunctionCount(JNIEnv * /*env*/,
-                                                                               jclass /*cls*/,
-                                                                               jint index)
+Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleFunctionCount(JNIEnv * /*env*/, jclass /*cls*/, jint /*index*/)
 {
-	return static_cast<jint>(augins_status_module_function_count(static_cast<size_t>(index)));
+	return 0;
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleFunctionName(JNIEnv *env,
-                                                                              jclass /*cls*/,
-                                                                              jint module_index,
-                                                                              jint function_index)
+Java_com_augmented_1insanity_runtime_AugInsBridge_nativeGetModuleFunctionName(JNIEnv *env, jclass /*cls*/, jint /*module_index*/, jint /*function_index*/)
 {
-	return to_jstring(env, augins_status_module_function_name(static_cast<size_t>(module_index),
-	                                                          static_cast<size_t>(function_index)));
+	return to_jstring(env, "");
 }
-
-#endif // XRT_FEATURE_AUG_INS

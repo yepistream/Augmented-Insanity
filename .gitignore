@@ -153,6 +153,80 @@ hand-tracking-models/
 Thumbs.db
 .idea/
 
-# Local override of fetch-xr-deps.ps1 paths
-xr-deps-paths.local
+# Session-artefact logs (build runs, logcat dumps, ninja output, anything piped
+# to a file at the repo root or inside source dirs). The upstream Monado tree
+# does not produce any tracked `.log` files, so a wildcard is safe.
+*.log
+
+# Ad-hoc scratch scripts dropped at the repo root during iteration.
+/temprandomcommand.*
+/scratch.*
+
+# AI-agent collaboration files. Personal scratch / working docs / tool
+# instructions that should not appear in the published repo.
+/agent.md
+/AGENT.md
+/PROJECT_PLAN.md
+/CLAUDE.md
+/claude.md
+/.claude/
+/.cursor/
+/.cursorrules
+/.cursorignore
+/.continue/
+/.aider*
+/.windsurf/
+/.codeium/
+/.github/copilot-instructions.md
+
+# Android / Java build artefacts that may escape per-module build/.
+# Production builds drop these inside build/ (already gitignored above),
+# so these are defence-in-depth for stray copies anywhere in the tree.
+# `*.jar` is NOT included because gradle/wrapper/gradle-wrapper.jar is
+# tracked on purpose.
+*.apk
+*.aar
+*.ap_
+*.dex
+*.class
+*.idsig
+
+# Signing keys, certificates, environment files. Should never be
+# committed under any circumstances.
+*.keystore
+*.jks
+*.p12
+*.pem
+*.key
+.env
+.env.*
+*.env
+
+# Editor / OS noise.
+*~
+*.swp
+*.swo
+*.bak
+*.tmp
+desktop.ini
+
+# Coverage / profiling artefacts (clang, gcc, JVM).
+*.gcda
+*.gcno
+*.gcov
+*.profraw
+*.profdata
+
+# Crash dumps.
+*.dmp
+core
+core.[0-9]*
+
+# Stray Python bytecode (in addition to the __pycache__/ rule above).
+*.pyc
+*.pyo
+
+# General-purpose local-override convention. The previous
+# xr-deps-paths.local entry is subsumed by this.
+*.local
 

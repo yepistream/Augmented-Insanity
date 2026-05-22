@@ -3,183 +3,174 @@ Copyright 2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-# ARCore Module Reference `[WIP]`
+# ARCore Head-Pose Module Reference
 
-`samples/augins-arcore-headpose/` -- 6DoF head-pose tracking module
-backed by Google ARCore. Also acts as the camera-frame producer for
-downstream modules (currently only the Mercury hand-tracking module
-consumes from it).
+`samples/augins-arcore-headpose/` provides 6DoF head pose via
+Google ARCore. The module spawns an `ArSession` in the runtime
+service process and exports an OpenXR-shaped function the
+runtime dispatches into.
 
-## What it does
+## Behaviour
 
-- On `aug_onConnect`, spawns a worker thread that creates and runs
-  an `ArSession` for the lifetime of the runtime.
-- Hooks two IPC dispatch calls:
-  - `xrLocateSpace` -- when a client locates the VIEW reference
-    space against any world-locked reference space (LOCAL,
-    LOCAL_FLOOR, STAGE, UNBOUNDED), the hook overrides the reply
-    with ARCore's tracked pose.
-  - `aug_deviceGetTrackedPose` -- when the head xdev's
-    `XRT_INPUT_GENERIC_HEAD_POSE` input is queried, same override.
-    This path backs the `T_xdev_head` half of `xrLocateViews`.
-  - `aug_spaceCreateSemanticIds` -- caches the
-    LOCAL/LOCAL_FLOOR/STAGE/UNBOUNDED/VIEW reference-space IDs as
-    soon as the client requests them, so the other two hooks can
-    filter accurately.
-- Publishes the YUV camera Y plane through the host-API frame
-  broker every tick. Subscribers (Mercury) consume it.
+- `aug_on_module_load` captures JVM and Context from the host API,
+  spawns a worker thread, and starts an `ArSession` against the
+  device's camera.
+- The worker calls `arcore_min_tick` in a ~60 Hz loop and stashes
+  each new pose into a mutex-guarded global.
+- `aug_LocateDeviceInSpace` (see
+  [Service-Side-Dispatch](Service-Side-Dispatch.md)) overwrites
+  the `XrSpaceLocation` with the latest ARCore pose. Non-head
+  devices never reach this function; the adapter filters them
+  out.
+- `aug_on_module_unload` signals the worker to stop, joins it,
+  releases the `ArSession`, and detaches the JNI thread.
 
-## Why this module exists
+OpenXR clients on this runtime receive ARCore-tracked 6DoF head
+pose in `XrView.pose` returned by `xrLocateViews`.
 
-There can only be one `ArSession` per process. If we let multiple
-modules each try to start ARCore, the second `ArSession_create()`
-fails. So one module owns ARCore (this one), and any other module
-that wants ARCore camera frames goes through the broker.
+## Not implemented yet
 
-The pose interception is a separate concern: even with ARCore
-running, the OpenXR state tracker would otherwise return Monado's
-default Android-Sensors gyro+accel fused pose to clients. The
-module's hooks are what make ARCore's VIO actually visible to
-client apps.
+- `T_xdev_head` override. The module only adapts
+  `space_locate_device` (the T_base_xdev half of
+  `xrLocateViews`). The T_xdev_head half stays whatever Monado's
+  gyro+accel fusion produces. The T_base_xdev transform dominates
+  so the resulting view pose is correct; v0.2.x can add a
+  `device_get_tracked_pose` adapter if a downstream consumer
+  needs ARCore on that half too. See [Roadmap](Roadmap.md).
+- `LOCAL_FLOOR` height offset. Reference-space-type-aware offsets
+  are not applied; head pose renders at headset height regardless
+  of whether the app requested `LOCAL`, `LOCAL_FLOOR`, `STAGE`,
+  or `UNBOUNDED`.
+- Camera frame publishing. v0.1 published the YUV camera frame's
+  Y plane to a host-API broker for the Mercury hand-tracking
+  module. Host API v1 has no broker entry; Mercury is also not
+  yet rewritten on the v0.2 ABI. The broker entry returns with
+  the Mercury rewrite.
 
-## File layout
+## Files
 
-```
-samples/augins-arcore-headpose/
-    metadata.json
-    settings.json
-    LICENSE-arcore                 third-party license attribution
-    arcore_module.cpp              the Aug-Ins glue
-    CMakeLists.txt
-    build.gradle
-    vendor/
-        arcore_c_api.h             ARCore C SDK header
-        arcore_instance.cpp        thin wrapper around ARCore C API
-        arcore_instance.h
-        xrt/xrt_handles.h          minimal Monado shim
-        arm64-v8a/
-            libarcore_sdk_c.so     prebuilt ARCore SDK (~6 MB)
-```
+- `arcore_module.cpp` -- module entry points and the worker
+  thread. ~200 lines.
+- `vendor/arcore_c_api.h`, `vendor/arcore_instance.{cpp,h}`,
+  `vendor/xrt/xrt_handles.h` -- vendored ARCore SDK C API plus a
+  thin wrapper (`arcore_min`) over `ArSession_*` calls, written
+  for the earlier in-tree ARCore xdev experiments.
+- `vendor/arm64-v8a/libarcore_sdk_c.so` -- prebuilt ARCore SDK,
+  shipped under `LICENSE-arcore`.
+- `metadata.json` -- manifest (Manifest_Version 1).
+- `CMakeLists.txt` -- standalone NDK build.
+- `build.gradle` -- packaging + adb push.
 
-## Manifest
+## Dependencies
 
-```json
-{
-    "Name": "Aug-Ins ARCore Head Pose",
-    "ID": "com.augmented_insanity.samples.arcore_headpose",
-    "Implemented_Functions": [
-        "aug_spaceCreateSemanticIds",
-        "xrLocateSpace",
-        "aug_deviceGetTrackedPose"
-    ]
-}
-```
+### On the device
 
-No `Advertised_OpenXR_Features` -- ARCore head pose is
-already the natural answer to `xrLocateViews`; the module just
-substitutes a better source for the same answer. No system bits, no
-new extensions.
+- Google Play Services for AR. The ARCore SDK is a wrapper over
+  an out-of-process service Google ships; `ArSession_create`
+  fails without it.
+- ARCore-compatible phone. See
+  [Google's compatibility list](https://developers.google.com/ar/devices).
+- CAMERA permission, granted to the runtime APK (declared in
+  `AndroidManifest.xml`). Prompted on first runtime activity
+  launch.
 
-## Dispatch flow
+### At build time
 
-For a client calling `xrLocateViews`:
+- `src/xrt/augins/module_abi.h`.
+- OpenXR headers (`src/external/openxr_includes/`).
+- Vendored ARCore SDK headers (`vendor/`).
+- Android NDK 26.3.x and CMake 3.22.x.
 
-1. Client-side OXR layer calls
-   `xrt_device_get_view_poses(head_xdev, ..., &T_xdev_head, fovs, poses)`,
-   which internally fires the IPC `device_get_tracked_pose` for the
-   head xdev's GENERIC_HEAD_POSE input.
-2. Server-side dispatch: real Monado handler computes the gyro+accel
-   pose into `reply.relation`.
-3. Aug-Ins fires `aug_deviceGetTrackedPose` hooks. The
-   arcore-headpose hook reads `m->name`, sees
-   `XRT_INPUT_GENERIC_HEAD_POSE`, and overwrites
-   `reply.relation` with ARCore's pose.
-4. Client-side OXR layer separately calls
-   `oxr_space_locate_device(head_xdev, base_space, ...)`, which
-   fires the IPC `space_locate_device` (mapped to xr name
-   `xrLocateViews` in Aug-Ins). The runtime returns the natural
-   `T_base_xdev` (identity for LOCAL, floor offset for
-   LOCAL_FLOOR, etc.).
-5. Client composes `T_base_head = T_xdev_head * T_base_xdev`, gets
-   ARCore's pose adjusted for the play space.
-
-For a client calling `xrLocateSpace(view, base, ...)`:
-
-1. The IPC `space_locate_space` fires; the server-side handler
-   walks the space tree in-process (not via IPC) and computes the
-   final relation.
-2. Aug-Ins fires `xrLocateSpace`. The arcore-headpose hook
-   verifies `m->space_id` is the cached VIEW id and
-   `m->base_space_id` is one of the cached world-locked IDs, and
-   overwrites with ARCore's pose.
-
-## Camera-frame publish
-
-After every successful ArCore frame tick, the worker calls:
-
-```cpp
-g_host->publish_camera_frame_y8(
-    img.plane_data[0],
-    img.width, img.height, img.plane_row_stride[0],
-    img.timestamp_ns,
-    g_intr_valid ? &g_cam_intr : nullptr);
-```
-
-The Y plane of the YUV camera image is the input format Mercury
-expects. `g_cam_intr` is populated once on the first successful
-`arcore_min_get_intrinsics` call.
-
-## Threading
-
-Three threads in this module:
-
-- The IPC server's per-client thread fires the dispatch hooks
-  synchronously. They are short -- read pose from a cached
-  `xrt_space_relation`, call `set_locate_space_relation`, return.
-- The arcore-headpose worker thread owns the `ArSession`, ticks
-  it on every loop iteration, updates the cached pose under a
-  mutex, and publishes the camera frame to the broker.
-- The lifecycle/back-buffer thread (runtime-side) is irrelevant
-  here.
-
-## Known caveats
-
-- **First-frame init is slow.** ARCore VIO needs ~1 second of
-  motion to initialize. Until then, the cached pose is
-  zero/identity. Clients see no head movement during this
-  warm-up.
-- **Translation drift after long sessions.** ARCore's VIO drifts
-  a few cm/min in featureless environments. Not a module bug;
-  intrinsic to monocular VIO.
-- **Display-geometry warning spam.** ARCore logs
-  `view_manager_utils.cc:133] Display geometry has an invalid
-  width: 0` repeatedly. Not a problem; we do not give ARCore a
-  render surface.
-- **JNI-attach warnings on internal threads.** See
-  [Known Issues](Known-Issues.md). Benign.
-
-## Building
+## Lifecycle
 
 ```
-.\gradlew :samples:augins-arcore-headpose:packageArcoreHeadposeAugins
-.\gradlew :samples:augins-arcore-headpose:installArcoreHeadposeAugins
+aug_on_module_load(host)
+  - validate host->struct_version >= 1
+  - cache host
+  - GetEnv on main thread (do NOT Attach/Detach here)
+  - NewGlobalRef the Application Context
+  - spawn worker(vm, ctx_global)
+  - return 0
+
+worker(vm, ctx_global)
+  - AttachCurrentThread (worker is a new thread)
+  - arcore_min_start_ex(...)
+  - loop {
+      arcore_min_tick(...)
+      stash pose into g_cached_pose (mutex)
+      sleep ~16 ms
+    } while (!g_stop)
+  - arcore_min_stop()
+  - DeleteGlobalRef(ctx_global)
+  - DetachCurrentThread (worker is responsible for its own detach)
+
+aug_LocateDeviceInSpace(baseSpace, time, &location)
+  - snapshot g_cached_pose under mutex
+  - if not tracking: clear POSITION_TRACKED bit, return XR_SUCCESS
+  - else: write pose into location, set tracked flags, return XR_SUCCESS
+
+aug_on_module_unload()
+  - signal g_stop
+  - join worker
+  - return
 ```
 
-## Verification
+The pose snapshot uses `std::mutex`. The critical section is a
+half-dozen float copies and a bool.
+
+## Configuration
+
+No per-module settings file in v0.2. ARCore configuration
+(autofocus, camera HZ mode) is set in `arcore_min_config` at
+session-start time. Current defaults:
+
+- `focus_mode = AUTO_FOCUS_ENABLED`
+- `camera_hz_mode = MAX_ARCAMERA_HZ`
+- `texture_update_mode` -- default (OES)
+- Plane detection, depth, augmented faces -- disabled
+
+Change by editing `arcore_module.cpp` and rebuilding. A per-module
+settings UI is `[Planned]` for v0.2.2.
+
+## Observing dispatch on the device
+
+The module emits a rate-limited info line every 240 calls:
 
 ```
-adb logcat -s "AugIns.ARCore:*"
+adb logcat -s "Aug-Ins.ARCore:V"
 ```
 
-Expected sequence on first client connect:
+Output during a running XR app:
 
 ```
-AugIns.ARCore: aug_onModuleLoad: host API v2 accepted
-AugIns.ARCore: aug_onConnect: ARCore worker started
-AugIns.ARCore: aug_spaceCreateSemanticIds: view=1 local=3 local_floor=4 stage=5 unbounded=6
-AugIns.ARCore: ARCore session started
-AugIns.ARCore: ARCore intrinsics: fx=... fy=... cx=... cy=... (640x480)
+I Aug-Ins.ARCore: aug_on_module_load: host API v1 accepted
+I Aug-Ins.ARCore: aug_on_module_load: ARCore worker spawned
+I Aug-Ins.ARCore: ARCore session started
+I Aug-Ins.ARCore: aug_LocateDeviceInSpace call #240 (rate-limited 1/240)
+I Aug-Ins.ARCore: aug_LocateDeviceInSpace call #480 (rate-limited 1/240)
+...
 ```
 
-Visual: any OpenXR app's rendered scene tracks 6DoF as you move
-the phone (translation + rotation), not just rotation.
+The dispatch fires twice per frame (one per view); a 90 Hz client
+produces ~180 calls/sec, roughly one log line per 1.3 seconds.
+
+## Known limitations and bugs
+
+| Item | Status | Note |
+|------|--------|------|
+| `T_xdev_head` is gyro+accel, not ARCore | `[Working]` | T_base_xdev dominates so the view pose is correct, but the device's own-frame pose inside the service is not ARCore-driven. v0.2.x can add a second adapter. |
+| Initial ~1 second ARCore convergence | `[Working]` | During convergence the module returns `XR_SUCCESS` with the `POSITION_TRACKED` bit cleared. |
+| One `ArSession` per service process | By design | XR clients share the same ARCore stream. Camera is not re-opened per-client. |
+| No `LOCAL_FLOOR` Y offset | `[WIP]` | Reference-space-type-aware Y offsets are not applied. |
+| Eager ARCore start at module load | `[WIP]` | The worker runs even when no XR client is connected. v0.2.x will lazy-start on first dispatch. |
+
+## Credits
+
+The ARCore SDK and Google Play Services for AR are Google
+products. See [Acknowledgements](Acknowledgements.md). The
+prebuilt `libarcore_sdk_c.so` in this module's zip is
+redistributed under Google's ARCore SDK license (file
+`LICENSE-arcore` in the sample directory).
+
+The `arcore_min` C wrapper was written for the earlier in-tree
+ARCore xdev experiments and preserved under `vendor/`.

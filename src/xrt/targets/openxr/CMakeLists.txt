@@ -153,3 +153,6 @@ endif()
 if(XRT_FEATURE_CLIENT_DEBUG_GUI)
 	target_link_libraries(${RUNTIME_TARGET} PRIVATE aux_util_debug_gui)
 endif()
+
+# Phase 1 demolition (2026-05-19): aux_augins_client linkage removed
+# when the entire client-side v0.2 architecture was ripped out.

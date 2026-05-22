@@ -20,6 +20,8 @@ target_link_libraries(
 		xrt-external-jni-wrap
 	)
 
+# Aug-Ins v0.2 service-side module subsystem. service_target.cpp calls
+# augins_loader_init / _shutdown at service start / stop.
 if(XRT_FEATURE_AUG_INS)
 	target_link_libraries(augins-service PRIVATE aux_augins)
 endif()

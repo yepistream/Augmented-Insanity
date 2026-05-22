@@ -493,5 +493,6 @@ oxr_xrGetInstanceProcAddr(XrInstance instance, const char *name, PFN_xrVoidFunct
 
 	struct oxr_instance *inst;
 	OXR_VERIFY_INSTANCE_AND_INIT_LOG(&log, instance, inst, "xrGetInstanceProcAddr");
+
 	return handle_non_null(inst, &log, name, function);
 }

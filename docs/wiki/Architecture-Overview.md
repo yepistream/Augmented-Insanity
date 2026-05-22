@@ -5,120 +5,137 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Architecture Overview
 
-Augmented Insanity is a fork of Monado that turns the OpenXR runtime into
-a *modular* runtime: capabilities like head pose and hand tracking are
-shipped as separate `.augins` packages and loaded at runtime, without
-recompiling the runtime APK.
+Augmented Insanity runs as an **out-of-process** OpenXR runtime on
+Android. There are two processes involved at runtime:
 
-## Two artefacts
+- The XR app process (any app that uses OpenXR -- hello_xr, a
+  Godot game, an in-house demo). Loads the Khronos OpenXR loader,
+  which loads `libopenxr_monado.so` as the active runtime. Most
+  OpenXR calls turn into IPC messages to the service.
+- The runtime service process
+  (`com.augmented_insanity.runtime.out_of_process`). Contains the
+  compositor, device drivers, tracking system, and the Aug-Ins
+  modules. Holds the CAMERA permission, the ARCore Java AAR, the
+  display surface, and shared state across XR clients.
+
+The split is inherited from upstream Monado. The v0.2 module
+system runs in the service process: modules need camera access,
+may open an `ArSession`, and outlive individual XR clients.
 
 ```
-+-----------------------------+         +-----------------------------+
-|        OpenXR client        |  IPC    |  Augmented Insanity service |
-|  (helloxr, Godot, Unity,    | <-----> |  (com.augmented_insanity.   |
-|   any XR app)               |         |   runtime.out_of_process)   |
-+-----------------------------+         +-----------------------------+
-                                                |
-                                                | dlopen
-                                                v
-                                        +-----------------------------+
-                                        |  .augins modules            |
-                                        |    augins-arcore-headpose   |
-                                        |    augins-mercury-...       |
-                                        |    augins-noop              |
-                                        |    augins-head-sway         |
-                                        +-----------------------------+
++---------- XR app process (untrusted) ----------+
+|                                                |
+|  Khronos OpenXR loader                         |
+|       |                                        |
+|       v                                        |
+|  libopenxr_monado.so (IPC client side)         |
+|       |                                        |
+|       v IPC                                    |
++-----------------|------------------------------+
+                  |
+                  v
++---------- runtime service process (privileged) ----------+
+|                                                          |
+|  ipc_server_generated.c   (IPC dispatch table)           |
+|    case IPC_SPACE_LOCATE_DEVICE:                         |
+|      #ifdef XRT_FEATURE_AUG_INS                          |
+|      if (aug_has_modules_for("aug_LocateDeviceInSpace")) |
+|        aug_adapter_space_locate_device(...)              |
+|      else                                                |
+|      #endif                                              |
+|        ipc_handle_space_locate_device(...)               |
+|                                                          |
+|  aux_augins (loader + dispatch + adapters + host API)    |
+|       |                                                  |
+|       v dlopen + dlsym                                   |
+|  com.x.y.z.so   <-- the module from <id>.augins          |
+|                                                          |
+|  Monado: compositor, devices, drivers, state tracker     |
++----------------------------------------------------------+
 ```
 
-The IPC bridge between client and service is unchanged from upstream
-Monado. The service is the only thing that touches devices, sensors, and
-modules.
+## What a module actually is
 
-## Runtime vs module
+A module is a `.augins` zip containing:
 
-The **runtime** is infrastructure:
+- `<ID>.so` -- the module's native code. Filename is `<manifest ID>.so`
+  with no `lib` prefix (the loader dlopens by that exact name).
+- `metadata.json` -- manifest (see [Manifest-Schema](Manifest-Schema.md)).
+- Any sibling `.so` files the module needs (e.g.
+  `libarcore_sdk_c.so` for the ARCore module). The loader preloads
+  these with `RTLD_NOW | RTLD_GLOBAL` before dlopen'ing the main `.so`.
+- Bundled assets (calibration files, ONNX models, etc.). The module
+  reads them via `host->get_module_data_dir()`.
 
-- Module loader (dependency resolution + `dlopen`).
-- IPC server, including the generated dispatch table.
-- Lifecycle manager (`aug_onModuleLoad` -> `aug_runtimeInit` -> `aug_onConnect` -> ...).
-- Versioned host API table (function pointers exposed to modules).
-- Camera-frame broker.
-- Stub-xdev factory.
-- Manifest aggregator (extension list, system-property bits).
+A module exports:
+
+- (Optional) `aug_on_module_load(host)` -- called once after dlopen.
+  Cache the host API table, spawn workers, open an ArSession.
+- (Optional) `aug_on_module_unload()` -- called at service shutdown.
+  Join workers, release resources.
+- One or more OpenXR-shaped functions named in the manifest's
+  `Implemented_Functions` array. The service-side adapters
+  dispatch into these when the corresponding IPC call arrives.
+
+## How a call flows
+
+Trace of an `xrLocateViews` call with the ARCore module providing
+head pose:
+
+1. XR app calls `xrLocateViews(session, ..., views[2])`.
+2. The OpenXR state tracker (`oxr_session_views.c`) decomposes the
+   call per view. For the head's pose in world space it calls
+   `oxr_space_locate_device(head_xdev, base_space, time, &T)`.
+3. The IPC client space overseer translates this into
+   `ipc_call_space_locate_device(...)` and sends an
+   `IPC_SPACE_LOCATE_DEVICE` message to the service.
+4. The service's generated dispatcher
+   (`ipc_server_generated.c`, case `IPC_SPACE_LOCATE_DEVICE`) checks
+   `aug_has_modules_for("aug_LocateDeviceInSpace")`. With the ARCore
+   module registered, this returns true.
+5. The dispatcher calls `aug_adapter_space_locate_device(...)`. The
+   adapter calls `ipc_handle_space_locate_device(...)` first (Q2:
+   runtime default runs before modules), then unpacks the
+   `xrt_space_relation` reply into an `XrSpaceLocation` and iterates
+   modules registered for `aug_LocateDeviceInSpace` in priority
+   order (Q1: last-write-wins).
+6. The ARCore module's `aug_LocateDeviceInSpace` function snapshots
+   its worker-cached ARCore pose and writes it into the
+   `XrSpaceLocation`.
+7. The adapter packs the `XrSpaceLocation` back into the IPC reply
+   and returns. The runtime sends the reply over IPC.
+8. The XR app sees the ARCore-tracked pose in `views[i].pose`.
+
+For why the call is split into `space_locate_device` plus
+`device_get_tracked_pose` on the service side, see
+[Service-Side-Dispatch](Service-Side-Dispatch.md).
+
+## Why service-side and not client-side
+
+Modules run in the service process, not in client XR-app
+processes. Three reasons:
+
+- Privileged resources (camera, microphone, ARCore session) cannot
+  be requested per-XR-app without forcing every game to declare
+  unrelated permissions.
+- Some resources are singleton on Android. There is exactly one
+  `ArSession` per process; on a phone this is effectively one per
+  device, not one per app.
+- Modules that override device state must coordinate across XR
+  clients. Service-side dispatch puts them where that coordination
+  already happens.
 
 
+## Where the code lives
 
-A **module** is a capability:
-
-- Ships as a `.augins` zip (a renamed zip with a `.so`, a `metadata.json`,
-  any vendored dependencies, optional ONNX models, optional license
-  texts and/or any other external resources needed).
-- Declares hooks in its manifest (`Implemented_Functions`).
-- Implements those hooks as `extern "C"` symbols in the `.so`.
-- Optionally consumes the host API to register producer callbacks
-  (hand-tracker callback, frame-broker subscription, etc).
-- Is independently installable, removable, and version-managed.
-
-## Dispatch flow
-
-Every IPC call from the client to the service that is enumerated in
-`src/xrt/ipc/shared/proto.py`'s `aug_ipc_to_xr` dictionary follows this
-sequence on the service side:
-
-1. Client invokes an OpenXR function (e.g. `xrLocateViews`).
-2. Client-side OpenXR loader translates to an IPC message
-   (`device_get_tracked_pose`) and sends it.
-3. Service-side `ipc_dispatch` (generated from `proto.py`) receives the
-   message.
-4. The handler computes a real reply by calling into Monado
-   (`ipc_handle_device_get_tracked_pose`).
-5. **Aug-Ins dispatch fires before the reply is sent**:
-   `augins_fire_hooks("aug_deviceGetTrackedPose", ics, msg, &reply, NULL)`.
-6. The dispatch looks up `aug_deviceGetTrackedPose` in
-   `g_dispatch_table` (a `unordered_map<string, vector<entry>>`), finds
-   every module that registered a hook for that name, and calls each
-   one in priority order.
-7. Each hook receives the message and reply pointers and may read or
-   overwrite the reply.
-8. After all hooks return, the (possibly modified) reply is sent back
-   to the client.
-
-See [IPC Hook Dispatch](IPC-Hook-Dispatch.md) for the data structures
-and code paths in detail.
-
-## Side channels
-
-A few cross-module concerns do not fit the pure IPC-hook model:
-
-- **Camera frames.** Example: Only one ARCore session can exist per process, so
-  the head-pose module owns it. Other modules subscribe to the
-  resulting Y-plane via the host-API frame broker. See
-  [Camera Frame Broker](Camera-Frame-Broker.md). [ ***WILL BE CHANGED IN FUTURE UPDATES*** ]
-- **Hand-tracker xdevs.** The runtime fabricates stub `xrt_device`
-  instances when modules advertise hand tracking; queries from the
-  client's xrLocateHandJointsEXT bottom out in the module-registered
-  callback via the host API's `register_hand_tracker`. See
-  [Stub Xdev Factory](Stub-Xdev-Factory.md).
-- **Per-module data dir.** Each `.augins` zip is extracted into its
-  own directory; the host API exposes that path to the module via
-  `get_module_data_dir()`. See
-  [Host API Reference](Host-API-Reference.md).
-
-## What is NOT modular
-
-Some things stay in the runtime APK and cannot be replaced by a module:
-
-- The OpenXR state tracker (`src/xrt/state_trackers/oxr/`).
-- The compositor (`src/xrt/compositor/`).
-- The IPC layer itself.
-- The Vulkan / GLES interop with the Android surface.
-
-I'm planning to implement modularity into this ones too, but as they are very *fragile* this will be tested at a later date. (Other then the IPC Layer)
-
-## See next
-
-- [Module System](Module-System.md) for the lifecycle and loader.
-- [Host API Reference](Host-API-Reference.md) for what modules can
-  call on the runtime side.
-- [Module Example Walkthrough](Module-Example-Walkthrough.md) for a
-  worked example.
+- `src/xrt/augins/` -- the runtime-side module subsystem (loader,
+  dispatch registry, host API, manifest parser, zip extractor,
+  adapters).
+- `src/xrt/ipc/shared/proto.py` -- the codegen that emits the
+  dispatch fork (`aug_has_modules_for` probe) in
+  `ipc_server_generated.c`.
+- `src/xrt/ipc/server/ipc_server_objects.{h,c}` -- xdev role
+  helpers used by the adapters (e.g. `ipc_server_xdev_is_head_role`).
+- `samples/augins-arcore-headpose/` -- production module.
+- `samples/augins-test-noop/`, `samples/augins-test-locate-space/` --
+  smaller test modules I used while verifying Phase 2b / Phase 2d.

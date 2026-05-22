@@ -1,5 +1,5 @@
 // Copyright 2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
-// SPDX-License-Identifier: BSL-1.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 /*!
  * Minimal launcher Activity for poking at the Aug-Ins GRS on-device without
  * needing an OpenXR client.
@@ -9,7 +9,7 @@
  *   - "Stop GRS"   : sends the SHUTDOWN_ACTION the service already supports
  *
  * Drop .augins packages into the path shown at the top of the screen, then
- * Start GRS â€” modules should appear in the list with their implemented
+ * Start GRS -- modules should appear in the list with their implemented
  * function counts.
  */
 package com.augmented_insanity.runtime
@@ -98,7 +98,7 @@ class AugInsTestActivity : AppCompatActivity() {
             if (mod.implementedFunctions.isEmpty()) {
                 sb.append("    (no functions hooked)\n")
             } else {
-                mod.implementedFunctions.forEach { fn -> sb.append("    â€¢ $fn\n") }
+                mod.implementedFunctions.forEach { fn -> sb.append("    *  $fn\n") }
             }
         }
         moduleList.text = sb.toString()

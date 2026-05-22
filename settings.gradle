@@ -46,20 +46,28 @@ include ':src:xrt:targets:android_common'
 // by default.
 include ':src:xrt:targets:openxr_android'
 
-// Aug-Ins sample modules. These build .augins packages outside the APK flow
-// and are only relevant when XRT_FEATURE_AUG_INS is on; including here so
-// `gradlew :samples:augins-noop:installNoopAugins` works from the repo root.
-include ':samples:augins-noop'
-project(':samples:augins-noop').projectDir = new File(rootDir, 'samples/augins-noop')
-
+// Aug-Ins sample modules.
+//
+// arcore-headpose: Phase 2e production module. Provides 6DoF head
+// pose via Google ARCore. Exports aug_LocateDeviceInSpace.
 include ':samples:augins-arcore-headpose'
 project(':samples:augins-arcore-headpose').projectDir = new File(rootDir, 'samples/augins-arcore-headpose')
 
-include ':samples:augins-mercury-handtracking-arcore'
-project(':samples:augins-mercury-handtracking-arcore').projectDir = new File(rootDir, 'samples/augins-mercury-handtracking-arcore')
+// test-noop: Phase 2b verification module. Smallest possible v0.2
+// service-side module -- just lifecycle hooks, no OpenXR functions.
+// Exists to prove the loader works end-to-end.
+include ':samples:augins-test-noop'
+project(':samples:augins-test-noop').projectDir = new File(rootDir, 'samples/augins-test-noop')
 
-// Featured tutorial module. Self-contained (no external SDKs); see
-// module-example/augins-head-sway/README.md and
+// test-locate-space: Phase 2d verification module. Implements
+// xrLocateSpace, writes a recognizable sentinel into the output. Used
+// to prove the codegen + adapter + dispatch chain works end-to-end.
+include ':samples:augins-test-locate-space'
+project(':samples:augins-test-locate-space').projectDir = new File(rootDir, 'samples/augins-test-locate-space')
+
+// head-sway: featured tutorial module. Adds a sinusoidal X-offset to
+// the head pose returned by aug_LocateDeviceInSpace. Standalone NDK
+// build, no external SDK dependencies. Walkthrough at
 // docs/wiki/Module-Example-Walkthrough.md.
 include ':module-example:augins-head-sway'
 project(':module-example:augins-head-sway').projectDir = new File(rootDir, 'module-example/augins-head-sway')

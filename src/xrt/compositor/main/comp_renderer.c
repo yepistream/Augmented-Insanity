@@ -1,5 +1,4 @@
 // Copyright 2019-2026, Collabora, Ltd.
-// Copyright 2024-2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
 // SPDX-License-Identifier: BSL-1.0
 /*!
  * @file

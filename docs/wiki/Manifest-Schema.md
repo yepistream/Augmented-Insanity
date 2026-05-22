@@ -5,188 +5,142 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Manifest Schema
 
-`metadata.json` declares everything the runtime needs to know about a
-module. It must sit at the root of the `.augins` zip alongside the
-module's `.so`.
+Every `.augins` package contains `metadata.json` at the zip root.
+Schema version: v1 (`Manifest_Version: 1`). The runtime rejects
+modules with a mismatched or missing `Manifest_Version`.
 
-## Reference
+Parser source of truth: `src/xrt/augins/manifest.cpp`.
+
+## Minimal example
 
 ```json
 {
-    "Name": "Human-readable name",
-    "ID": "reverse.dotted.identifier",
+    "Manifest_Version": 1,
+    "ID": "com.example.modules.my_module",
     "Version": "0.1.0",
-    "Description": "One-paragraph description of what the module does.",
-    "Dependencies": ["other.module.id"],
-    "Advertised_OpenXR_Features": {
-        "Extensions": ["XR_EXT_..."],
-        "InteractionProfiles": [],
-        "SystemPropertyBits": ["handTracking"]
-    },
     "Implemented_Functions": [
-        "xrLocateSpace",
-        "aug_deviceGetTrackedPose"
+        "xrLocateSpace"
     ]
 }
 ```
 
-## Field-by-field
+## Full example
 
-### `Name` (required, string)
-
-Display name used in logs and (eventually) in any UI listing
-installed modules. Free-form. Example: `"Mercury Hand Tracking
-(ARCore camera)"`.
-
-### `ID` (required, string)
-
-The module's unique identifier across the entire module ecosystem.
-Convention: reverse-DNS. Example:
-`"com.augmented_insanity.samples.mercury_handtracking_arcore"`.
-
-The runtime uses `ID` to:
-
-- Name the per-module extraction directory (`cache/opennedmodules/<id>/`).
-- `dlopen` the module's `.so` (the `.so` filename inside the zip
-  must be exactly `<ID>.so`).
-- Match against other modules' `Dependencies`.
-
-Two `.augins` files with the same `ID` are an error; the second-loaded
-one wins with a warning.
-
-### `Version` (required, string)
-
-Semver-shaped human-readable version. Currently informational only;
-the runtime does not enforce semver semantics.
-
-### `Description` (required, string)
-
-One paragraph. Free-form.
-
-### `Dependencies` (optional, array of `ID` strings)
-
-Other modules this module requires loaded before it. The loader does
-topological sort; if a dep is missing the dependent module is skipped
-with a clear log line.
-
-Example: `augins-mercury-handtracking-arcore` lists
-`["com.augmented_insanity.samples.arcore_headpose"]` because Mercury
-consumes camera frames produced by the ARCore module.
-
-### `Advertised_OpenXR_Features` (optional, object)
-
-Tells the runtime to surface OpenXR features on behalf of this module.
-The runtime aggregates these across all loaded modules and answers
-client queries truthfully.
-
-#### `Extensions` (optional, array of string)
-
-OpenXR extension names this module brings. Currently aggregated in
-the runtime's manifest aggregator
-(`src/xrt/augins/augins_extensions.cpp`); the OXR-side surfacing
-through `xrEnumerateInstanceExtensionProperties` is not yet wired.
-[WIP].
-
-#### `InteractionProfiles` (optional, array of string)
-
-Reserved. Schema field exists; aggregator does not yet consume.
-
-#### `SystemPropertyBits` (optional, array of string)
-
-Used by the stub-xdev factory to decide which placeholder
-`xrt_device` instances to fabricate. Currently recognised tokens:
-
-- `"handTracking"` -- creates a hand-tracker xdev with both
-  `unobstructed` and `conforming` left/right inputs. The module
-  must call `g_host->register_hand_tracker(cb)` to actually
-  produce joints when queried.
-
-Future tokens (eye tracking, body tracking, etc.) will be added
-here as the matching xdev factory paths land.
-
-### `Implemented_Functions` (optional, array of string)
-
-Names of IPC dispatch hooks the module implements. Each name must:
-
-- Be a key in the `aug_ipc_to_xr` value-set in
-  `src/xrt/ipc/shared/proto.py` (i.e. either an `xr*` function name
-  or a synthetic `aug_*` name for IPC calls without an OpenXR
-  analogue).
-- Be exported from the module's `.so` as a C symbol with the same
-  name (`extern "C"`).
-- Have the signature
-  `int32_t (*)(void *ics, void *msg, void *reply, void *unused)`.
-
-Hooks not listed here are not registered, even if the symbol is
-exported.
-
-Currently recognised names (see
-[IPC Hook Dispatch](IPC-Hook-Dispatch.md) for the full list and
-how to add new ones):
-
-- OpenXR-derived: `xrCreateSession`, `xrBeginSession`,
-  `xrEndSession`, `xrPollEvent`, `xrWaitFrame`, `xrBeginFrame`,
-  `xrEndFrame`, `xrCreateSwapchain`, `xrAcquireSwapchainImage`,
-  `xrLocateSpace`, `xrLocateSpaces`, `xrLocateViews`, ...
-- Synthetic: `aug_spaceCreateSemanticIds`,
-  `aug_deviceGetTrackedPose`.
-
-### **Notice:** *I have a plan to allow any and all hooks to be dispatched.*
-
-## Examples
-
-### Minimal (head-sway tutorial)
+From `samples/augins-arcore-headpose/metadata.json`:
 
 ```json
 {
-    "Name": "Aug-Ins Head-Sway Example",
-    "ID": "com.augmented_insanity.examples.head_sway",
-    "Version": "0.1.0",
-    "Description": "Tutorial module.",
-    "Dependencies": [],
-    "Advertised_OpenXR_Features": {},
+    "Manifest_Version": 1,
+    "ID": "com.augmented_insanity.samples.arcore_headpose",
+    "Version": "0.2.0",
+    "Name": "Aug-Ins ARCore Head Pose",
+    "Description": "Provides 6DoF head pose via Google ARCore. ...",
+    "Priority": 100,
     "Implemented_Functions": [
-        "aug_deviceGetTrackedPose"
+        "aug_LocateDeviceInSpace"
     ]
 }
 ```
 
-### Capability producer with deps (Mercury ARCore-camera)
+## Field reference
 
-```json
-{
-    "Name": "Aug-Ins Mercury Hand Tracking (ARCore camera)",
-    "ID": "com.augmented_insanity.samples.mercury_handtracking_arcore",
-    "Version": "0.1.0",
-    "Description": "Mercury+ONNX hand tracking, camera frames sourced from arcore-headpose.",
-    "Dependencies": [
-        "com.augmented_insanity.samples.arcore_headpose"
-    ],
-    "Advertised_OpenXR_Features": {
-        "Extensions": ["XR_EXT_hand_tracking"],
-        "SystemPropertyBits": ["handTracking"]
-    },
-    "Implemented_Functions": []
-}
-```
+### Required
 
-**Note:** a producer-only module like Mercury declares no
-`Implemented_Functions` because it does not intercept IPC dispatches
-itself. It uses the host API (`register_hand_tracker`,
-`subscribe_camera_frame`) instead.
+#### `Manifest_Version` (integer)
 
-## Validation
+The schema version. Currently `1`. The runtime compares against
+`AUG_MANIFEST_VERSION` (defined in `src/xrt/augins/module_abi.h`)
+and rejects mismatches.
 
-`metadata.json` is parsed at module load time. Common errors:
+#### `ID` (string)
 
-- Missing `ID`, `Name`, or `Version`: module is skipped with
-  `Manifest is missing required field: <field>`.
-- Invalid JSON: module is skipped with parse error.
-- `Dependencies` referencing a non-existent module ID: dependent
-  module is skipped with `Dependency '<id>' not found`.
-- `SystemPropertyBits` containing unrecognised tokens: tokens are
-  warned and ignored.
+Globally unique reverse-DNS identifier for the module. Used to:
 
-There is no formal JSON schema validator yet; structural checks
-happen in `augins_dispatch.cpp::parse_module`. A schema-driven
-validator is a candidate for [Roadmap](Roadmap.md).
+- Name the main `.so` inside the zip (`<ID>.so` exactly, no `lib`
+  prefix).
+- Construct the per-module data dir path.
+- Disambiguate modules that override the same function name.
+
+Recommended scheme: `<owner-domain-reversed>.modules.<short>` for
+production modules, or `<owner-domain-reversed>.samples.<short>`
+for examples in this repo. Restricted to characters valid in a
+filename.
+
+#### `Version` (string)
+
+Module version. Any string format. SemVer recommended. The
+runtime does not currently parse or compare the value; the field
+is for human inspection and future update-detection logic.
+
+#### `Implemented_Functions` (array of strings)
+
+The list of OpenXR-named or Aug-Ins-synthetic functions this module
+implements. The loader dlsyms each name from the module's `.so` and
+registers it for dispatch. See
+[Service-Side-Dispatch](Service-Side-Dispatch.md) for the current
+set of dispatchable names (`aug_implemented_adapters` in
+`src/xrt/ipc/shared/proto.py`).
+
+A module may list a name with no registered adapter. The loader
+warns and skips that entry; other entries from the same module
+still register.
+
+### Optional
+
+#### `Name` (string)
+
+Human-readable display name. Surfaced by `AugInsTestActivity` and
+by any future settings UI. Free-form. Defaults to `ID` if absent.
+
+#### `Description` (string)
+
+Free-form text, same usage as `Name`.
+
+#### `Priority` (integer)
+
+Dispatch ordering. Default: `100`. Lower runs earlier; combined
+with last-write-wins (Q1) this means higher `Priority`
+overwrites the writes of lower-priority modules.
+
+Suggested ranges:
+
+- `0..49` -- pre-baseline decorators (runs before default-100)
+- `50..99` -- secondary observers and filters
+- `100` -- default for production modules
+- `101..199` -- explicit overrides on top of the default
+- `200+` -- last-word modules (debug overlays, user settings
+  overrides)
+
+The runtime sorts by the numeric value; the ranges above are
+convention only.
+
+`[Planned]` v0.2.x adds a central `module_order.json` override file
+in the modules dir that can re-order modules independent of their
+declared `Priority`.
+
+## Fields planned but not in v1
+
+The parser will accept and ignore unknown top-level fields, so the
+following can be added in v0.2.x without breaking v1 modules:
+
+- `Failure_Mode` -- per-module choice for Q5 ("abort",
+  "recoverable", "critical"). v0.2 base behaviour is "abort".
+- `Dependencies` -- array of module IDs that must be loaded first.
+  Will trigger a topological sort across the module set.
+- `Advertised_OpenXR_Features` -- system bits this module
+  contributes to (`supportsHandTracking`, etc.).
+
+See [Roadmap](Roadmap.md).
+
+## Validation walk
+
+The parser:
+
+1. Loads the file as UTF-8 JSON via cJSON.
+2. Reads `Manifest_Version`; rejects non-integer or mismatched.
+3. Reads `ID`, `Version`, `Implemented_Functions`; rejects if any
+   missing or wrong type.
+4. Reads `Name`, `Description`, `Priority` if present; defaults
+   are `""`, `""`, `100`.
+5. Unknown top-level keys are ignored. (v1 forward-compat path for
+   future fields.)

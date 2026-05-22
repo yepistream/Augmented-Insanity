@@ -1,0 +1,9 @@
+{
+    "Manifest_Version": 1,
+    "ID": "com.augmented_insanity.samples.test_noop",
+    "Version": "0.2.0",
+    "Name": "Aug-Ins Test Noop",
+    "Description": "Minimal v0.2 service-side test module. Exports aug_on_module_load (logs and returns 0) and aug_on_module_unload (logs). No OpenXR functions implemented. Used by Phase 2b end-to-end verification.",
+    "Priority": 100,
+    "Implemented_Functions": []
+}

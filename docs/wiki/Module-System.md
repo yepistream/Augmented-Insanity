@@ -5,147 +5,176 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Module System
 
-How the runtime discovers, orders, loads, and lifecycles `.augins`
-modules.
+Loader behaviour at service start, per-module lifecycle hooks,
+and the dispatch contract.
 
-Code paths:
+## `.augins` package
 
-- `src/xrt/augins/augins_dispatch.{cpp,h}` -- loader, dispatch table.
-- `src/xrt/augins/augins_lifecycle.{cpp,h}` -- lifecycle dispatcher.
-- `src/xrt/augins/augins_module_abi.h` -- the public ABI module authors
-  include.
-
-## The `.augins` file format
-
-A `.augins` is a zip archive with no enforced compression scheme.
-Mandatory entries:
-
-- `<module-id>.so` -- the module's native code, where `<module-id>` is
-  the `ID` field from `metadata.json`. The `.so` filename matters
-  because the loader does `dlopen("<module-id>.so", ...)`. No `lib`
-  prefix.
-- `metadata.json` -- the manifest. See
-  [Manifest Schema](Manifest-Schema.md).
-
-Optional entries:
-
-- `settings.json` -- per-module settings; opaque to the runtime. The
-  module reads it from its own data dir.
-- Any other file the module wants to bundle: ONNX models, calibration
-  JSON, license texts, additional `.so` siblings (e.g.
-  `libarcore_sdk_c.so` for the ARCore module).
-
-## Discovery
-
-On service start, `augins::launch(modules_dir, cache_dir)` is called.
-Where:
-
-- `modules_dir` is `/data/data/com.augmented_insanity.runtime.out_of_process/files/modules/`,
-  the directory the runtime watches for `.augins` files.
-- `cache_dir` is `.../cache/opennedmodules/`, where each `.augins` is
-  extracted (one subdirectory per module ID). Per-module data dirs
-  exposed via the host API's `get_module_data_dir()` point here.
-
-Every `.augins` file in `modules_dir` is enumerated and its
-`metadata.json` parsed. Files that fail to parse are skipped with a
-warning.
-
-## Dependency resolution
-
-After parsing, modules are sorted topologically by their `Dependencies`
-field. Algorithm: Kahn's algorithm; modules with zero pending deps are
-loaded first, dependents follow.
-
-If module A's `Dependencies` lists module B and B is not present, A is
-skipped with a clear log line. Cyclic dependencies cause every module
-in the cycle to be skipped (the runtime stays healthy).
-
-The resolved load order is logged at INFO so debugging is trivial:
+A `.augins` file is a zip with at minimum:
 
 ```
-Aug-Ins: Module load order: noop arcore_headpose mercury_handtracking_arcore
+my-module.augins
+  +-- metadata.json            (required, see Manifest-Schema)
+  +-- <ID>.so                  (required, the module .so)
+  +-- libfoo.so, libbar.so     (optional, dlopen siblings)
+  +-- models/, calibration/    (optional, bundled assets)
 ```
 
-## Loading
+`<ID>` is the `ID` field from the manifest, verbatim. No `lib` prefix.
+The loader does `dlopen("<ID>.so", ...)` once it has extracted the
+zip; if the filename does not match, the module will not load.
 
-For each module in load order:
+## Where modules go
 
-1. Sibling `.so` files inside the `.augins` zip (anything *not* the
-   main `<module-id>.so`) are pre-`dlopen`ed with
-   `RTLD_NOW | RTLD_GLOBAL`. This lets the main module's `DT_NEEDED`
-   entries resolve. Used for ARCore SDK and other vendored
-   dependencies.
-2. The main module is `dlopen`ed with `RTLD_NOW`.
-3. Lifecycle symbols are resolved via `dlsym`:
-   `aug_onModuleLoad`, `aug_runtimeInit`, `aug_onConnect`,
-   `aug_runtimeFinished`, etc. Missing symbols are silently skipped
-   (each callback is optional).
-4. Hook symbols listed in `metadata.json::Implemented_Functions` are
-   `dlsym`'d and registered in `g_dispatch_table[name]`.
-5. Manifest-advertised features (`Advertised_OpenXR_Features.Extensions`,
-   `SystemPropertyBits`) are unioned into the global aggregator.
-6. The module is appended to `g_loaded_modules`.
+The service scans
+`/data/data/com.augmented_insanity.runtime.out_of_process/files/modules/`
+for `*.augins` files. Push your module there with:
 
-After all modules are loaded, the runtime fans out the
-`aug_onModuleLoad` callback to every module, passing the host API
-table as `args`.
+```
+adb push my-module.augins /data/local/tmp/
+adb shell run-as com.augmented_insanity.runtime.out_of_process \
+  cp /data/local/tmp/my-module.augins files/modules/
+```
 
-## Lifecycle
+The sample modules' `installFooAugins` Gradle tasks automate this.
+See [Building-A-Module](Building-A-Module.md).
 
-Callbacks fire in this order, fanned out across all loaded modules at
-each step:
+`[Planned]` v0.2.x: APK-bundled fallback under `assets/modules/`
+for default modules that ship with the runtime APK; user-installed
+modules with the same `ID` will override APK-bundled ones.
 
-1. `aug_onModuleLoad(args)` -- once at startup. `args` is
-   `const struct aug_host_api *`. Modules cache the pointer here.
-2. `aug_runtimeInit(NULL)` -- once at startup, after dispatch table
-   is fully built.
-3. `aug_onConnect(NULL)` -- on each new client connection.
-4. **Per-IPC-call hooks** -- `augins_fire_hooks("xrLocateSpace", ...)`
-   etc. for every IPC call mapped in `proto.py`'s `aug_ipc_to_xr`.**[Planned changes to allow all IPC-calls, currently I'm doing it this way for ease of testing]**
-5. `aug_runtimeFinished(NULL)` -- once at shutdown, after the IPC
-   server has stopped accepting clients and the back-buffer worker
-   has joined.
+## What the loader does at start
 
-Optional back-buffer thread callbacks
-(`aug_backBufferUpdateLoop`, `...Pause`, `...Resume`) run on a
-dedicated thread the runtime spawns; intended for slow per-second
-work that must not block the IPC dispatch.
+When the service process starts (Java `MonadoService.onCreate`
+calls into native via `nativeStartServer`), the loader runs in
+this order:
 
-## Three module roles
+1. Bind host API to the JVM and Application Context. After this,
+   `host->get_jvm()` and `host->get_context()` return valid
+   handles.
+2. Scan the modules dir for `*.augins`. Each entry is processed
+   independently; a failure on one entry does not affect others.
+3. Extract the zip into a per-module cache subdirectory. A
+   size-stamp file (`<entry>.size`) lets a subsequent start skip
+   extraction when the source zip is byte-identical.
+4. Parse `metadata.json` and validate `Manifest_Version`, `ID`,
+   `Version`, `Implemented_Functions`. Bad manifests are logged
+   and the module is skipped.
+5. Preload sibling `.so` files in the extraction dir with
+   `RTLD_NOW | RTLD_GLOBAL` so the main module `.so` resolves
+   their symbols.
+6. `dlopen <ID>.so` with `RTLD_NOW`. Each name from
+   `Implemented_Functions` is `dlsym`'d. Missing symbols are
+   warned but do not block the module.
+7. Register dispatch entries for each resolved symbol in the
+   dispatch map (see Dispatch model below).
+8. `dlsym aug_on_module_load` and `aug_on_module_unload` (both
+   optional) and store them in the lifecycle list.
+9. After all modules are loaded: sort the dispatch map by
+   priority, then fire `aug_on_module_load` for each module in
+   load order. A non-zero return rejects the module (dispatch
+   entries are not yet unwound -- see `[Planned]` note in
+   [Roadmap](Roadmap.md)).
 
-A module typically plays one or more of three roles:
+At service shutdown the loader fires `aug_on_module_unload` in
+reverse order, then dlcloses each handle.
 
-- **Hook implementer.** Lists IPC hook names in
-  `Implemented_Functions` and exports the corresponding `extern "C"`
-  symbols. Reads or modifies IPC replies. Example: head-sway example.
-- **Capability producer.** Calls
-  `g_host->register_hand_tracker(cb)` and friends. The runtime stub
-  xdevs route queries to the registered callback. Requires a
-  matching `Advertised_OpenXR_Features.SystemPropertyBits` entry.
-  Example: Mercury hand-tracking module.
-- **Frame broker producer or subscriber.** Calls
-  `g_host->publish_camera_frame_y8(...)` or
-  `g_host->subscribe_camera_frame(...)` to share Y-plane luminance
-  frames across modules. Producer thread drives subscribers
-  synchronously. Example: arcore-headpose publishes; mercury-arcore
-  subscribes.
+## Lifecycle hooks
 
-A single module can play all three roles at once.
+Both hooks are optional. A module that does not need worker
+threads, ArSessions, or any setup beyond what dlopen already does
+can omit both and export only its dispatched functions.
 
-## Aborting modules
+```c
+// Called once after dlopen + dispatch entries registered.
+// Return non-zero to reject the module (dlclose follows).
+int aug_on_module_load(const struct aug_host_api *host);
 
-If a hook returns `AUG_FATAL_MODULE`, the runtime removes that
-module from `g_dispatch_table` and from `g_loaded_modules` and
-continues dispatching to the rest. The module's process state
-remains; only its hooks stop firing.
+// Called once at service shutdown, before dlclose. Join workers
+// and release resources here.
+void aug_on_module_unload(void);
+```
 
-`AUG_FATAL_RUNTIME` aborts the whole service process. Reserve for
-unrecoverable errors that compromise other modules and *(even thous seperate by a whole layer, but just in case)* the runtime.
+Inside `aug_on_module_load`, modules typically:
 
-## See also
+- Validate `host->struct_version >= AUG_HOST_API_VERSION` (or the
+  lower minimum the module actually needs).
+- Cache the `host` pointer in a module-private global.
+- Capture `host->get_module_data_dir()` if needed on worker threads.
+- Spawn background threads (sensor pollers, ArSession ticker, ONNX
+  inference workers, ...).
 
-- [Manifest Schema](Manifest-Schema.md) for `metadata.json` fields.
-- [Host API Reference](Host-API-Reference.md) for the function
-  table modules receive.
-- [IPC Hook Dispatch](IPC-Hook-Dispatch.md) for the dispatch
-  details.
+The runtime calls `aug_on_module_load` from the service's main
+thread, which is already attached to the JVM. Calling
+`DetachCurrentThread` on this thread is a JNI-spec fatal
+("attempting to detach while still running code"). Use
+`vm->GetEnv(...)` to obtain the `JNIEnv` inside the load hook.
+
+## Dispatch model
+
+Five locked design decisions govern how modules participate in
+dispatch. These are not configurable per-module in v0.2 base.
+
+| ID | Rule | Note |
+|----|------|------|
+| Q1 | Last-write-wins on output conflicts | Modules share a single output struct; later writes survive. |
+| Q2 | Runtime default runs before modules | Modules see the baseline output and decorate or overwrite. |
+| Q3 | No short-circuit, no exclusivity | Any module can register for any function name. The chain runs to completion unless aborted by Q5. |
+| Q4 | Priority field in manifest orders the chain | Lower `Priority` runs earlier. Combined with Q1, higher `Priority` overwrites earlier writers. |
+| Q5 | Abort on first non-success XrResult | Subsequent modules in the chain are skipped; the client sees that result. |
+
+`[Planned]` v0.2.x adds a per-module `Failure_Mode` field
+(`"abort"` / `"recoverable"` / `"critical"`) for tuning Q5.
+
+## How a name resolves
+
+The `Implemented_Functions` array holds OpenXR function names or
+Aug-Ins synthetic names. Examples:
+
+- `"xrLocateSpace"` -- the real OpenXR function. Backed by the
+  service-side adapter `aug_adapter_space_locate_space`.
+- `"aug_LocateDeviceInSpace"` -- an Aug-Ins synthetic name for a
+  function that has no direct OpenXR equivalent (it backs half of
+  `xrLocateViews` on the service-side IPC layer). The `aug_` prefix
+  marks it as Aug-Ins-specific.
+
+The runtime adapter decides which IPC call routes to which name.
+See [Service-Side-Dispatch](Service-Side-Dispatch.md) for the
+current `aug_implemented_adapters` set.
+
+A module that lists a name without a registered adapter is loaded
+without that entry; the loader logs a warning. Adding the adapter
+and rebuilding the runtime activates the existing module's entry
+on the next start.
+
+## Per-module data directory
+
+Each module's asset directory:
+
+```
+/data/data/com.augmented_insanity.runtime.out_of_process/cache/opennedmodules/_staged/<id>.augins/
+```
+
+Available via `host->get_module_data_dir()` from any call the
+runtime made into the module (including `aug_on_module_load` and
+any dispatched function). The implementation is thread-local
+storage pushed and popped by the dispatcher around every call.
+
+A worker thread the module spawned itself does not have the TLS
+populated, so `get_module_data_dir()` returns an empty string
+there. Capture the path inside `aug_on_module_load` and stash it
+in a module-private global before spawning workers.
+
+## Error handling at load
+
+| Failure | Response |
+|---------|----------|
+| `metadata.json` parse failure | Log, skip module, continue. |
+| `Manifest_Version` mismatch | Log, skip module, continue. |
+| Zip extraction failure | Log, skip module, continue. |
+| dlopen failure | Log, skip module, continue. |
+| Symbol in `Implemented_Functions` missing | Warn for that name, register the others, partial load OK. |
+| `aug_on_module_load` returns non-zero | Log; dispatch entries currently stay registered. See `[Planned]` cleanup in [Roadmap](Roadmap.md). |
+
+The loader logs and continues on every failure path; one broken
+module does not block the rest.

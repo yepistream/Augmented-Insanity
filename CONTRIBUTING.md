@@ -5,8 +5,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Contributing to Augmented Insanity
 
-Contributions are welcome. This document covers what to do before opening a
-pull request and what the project expects from the patch itself.
+Procedure for opening a pull request and the expectations on the
+patch itself.
 
 ## Before you start
 
@@ -23,20 +23,22 @@ pull request and what the project expects from the patch itself.
 
 ## Licensing of contributions
 
-By submitting a pull request, you agree that:
+By submitting a pull request, the contributor agrees that:
 
-- Code you author for `src/xrt/augins/`, `samples/`, `module-example/`,
-  `docs/`, `scripts/`, `.github/`, or any other path that is currently
-  GPL-3.0-or-later, will be contributed under **GPL-3.0-or-later**.
-- Code you author as a modification to a file currently under BSL-1.0, where
-  the modification is substantive, may be relicensed by the project under
-  GPL-3.0-or-later (BSL-1.0 permits this).
-- Code you author as a non-substantive modification to a BSL-1.0 file (typo
-  fix, comment cleanup, copyright bump) stays under BSL-1.0; do not flip the
-  SPDX header.
-- Vendored third-party code retains its upstream license; do not relicense.
+- Code authored for `src/xrt/augins/`, `samples/`,
+  `module-example/`, `docs/`, `scripts/`, `.github/`, or any
+  other path currently under GPL-3.0-or-later is contributed
+  under GPL-3.0-or-later.
+- Substantive modifications to a file currently under BSL-1.0
+  may be relicensed by the project under GPL-3.0-or-later
+  (BSL-1.0 permits this).
+- Non-substantive modifications to a BSL-1.0 file (typo fix,
+  comment cleanup, copyright bump) stay under BSL-1.0; do not
+  flip the SPDX header.
+- Vendored third-party code retains its upstream license; do
+  not relicense.
 
-If you have any doubt about which case applies, ask in the issue or PR.
+Ask in the issue or PR for unclear cases.
 
 ## DCO sign-off
 
@@ -100,31 +102,45 @@ with the project owner.
 
 ## Adding a new module to `samples/`
 
-If you write a module general-purpose enough that it should ship with the
-project (rather than as an external `.augins`):
+For a module general-purpose enough to ship with the project
+(rather than as an external `.augins`):
 
 1. Create `samples/augins-<your-module-name>/`.
-2. Author `metadata.json`, `settings.json`, the source file, and (typically)
-   `CMakeLists.txt` plus `build.gradle`. Use `samples/augins-noop/` as the
-   template for a standalone module, or `samples/augins-mercury-handtracking-arcore/`
-   for an in-tree-built module.
+2. Author `metadata.json`, the source file(s), `CMakeLists.txt`,
+   and `build.gradle`. Use `samples/augins-test-noop/` as the
+   template for a smallest-possible module, or
+   `samples/augins-arcore-headpose/` for a production module
+   with vendored sibling `.so` files.
 3. Add the new subproject to `settings.gradle`.
-4. Document the module in `docs/wiki/<Your-Module>-Reference.md` (link from
-   `docs/wiki/Home.md`).
-5. Update `MODIFICATIONS.md` if the module required runtime changes.
+4. Document the module in `docs/wiki/<Your-Module>-Reference.md`
+   and link it from `docs/wiki/Home.md` and
+   `docs/wiki/Implementation-Status.md`.
+5. Update `MODIFICATIONS.md` if the module required runtime
+   changes.
 
-## Adding a new IPC hook
+See [docs/wiki/Building-A-Module.md](docs/wiki/Building-A-Module.md)
+for the per-module build setup.
 
-If you need the runtime to expose a new IPC dispatch hook (so modules can
-intercept a Monado IPC call that isn't currently in the dispatch table):
+## Adding a new dispatchable IPC call
 
-1. Add the IPC call name + a synthetic xr-name to the `aug_ipc_to_xr`
-   dictionary in `src/xrt/ipc/shared/proto.py`. Use a synthetic name like
-   `aug_<descriptive>` if the IPC call has no direct OpenXR API analogue.
-2. Verify the regenerated `ipc_server_generated.c` has an
-   `augins_fire_hooks(...)` call before the relevant `ipc_send`.
-3. Document the hook in `docs/wiki/IPC-Hook-Dispatch.md`.
-4. Either patch an existing module to use it, or describe the use case in the
+To make a Monado IPC call routable through modules:
+
+1. Pick the module-facing name. For an IPC call with a 1:1
+   OpenXR equivalent, use the OpenXR name. Otherwise invent a
+   synthetic `aug_<CamelCase>` name and document the choice in
+   the `proto.py` comment.
+2. Add the entry to `aug_ipc_to_xr` in
+   `src/xrt/ipc/shared/proto.py` (IPC call -> module-facing
+   name). Add the module-facing name to
+   `aug_implemented_adapters` in the same file.
+3. Declare and implement `aug_adapter_<call>` in
+   `src/xrt/augins/adapters.{h,cpp}`. Same signature as
+   `ipc_handle_<call>` in
+   `src/xrt/ipc/server/ipc_server_handler.c`. Follow the
+   five-step template documented in
+   [docs/wiki/Service-Side-Dispatch.md](docs/wiki/Service-Side-Dispatch.md).
+4. Either update an existing module to consume the new name in
+   its `Implemented_Functions`, or describe the use case in the
    PR.
 
 ## Code of conduct

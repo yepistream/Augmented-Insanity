@@ -37,10 +37,6 @@
 #include "server/ipc_server_objects.h"
 #include "server/ipc_server_interface.h"
 
-#ifdef XRT_FEATURE_AUG_INS
-#include "augins_stub_xdevs.h"
-#endif
-
 #include <stdlib.h>
 #include <stdbool.h>
 #include <sys/types.h>
@@ -208,7 +204,7 @@ init_shm_and_instance_state(struct ipc_server *s, volatile struct ipc_client_sta
 
 	/*
 	 * Used to synchronize all client's xrt_instance::startup_timestamp.
-	 * Add random variation of Ã‚Â±5 minutes around the global runtime startup timestamp
+	 * Add random variation of +/-5 minutes around the global runtime startup timestamp
 	 * so clients are close to each other but not exactly the same.
 	 */
 	const int64_t variation_range_ns = (int64_t)(10 * 60) * U_TIME_1S_IN_NS; // 10 minutes total range
@@ -702,13 +698,13 @@ ipc_server_init_system_if_available_locked(struct ipc_server *s,
 			xret = xrt_instance_create_system(s->xinst, &s->xsys, &s->xsysd, &s->xso, &s->xsysc);
 			IPC_CHK_WITH_GOTO(s, xret, "xrt_instance_create_system", error);
 
-#ifdef XRT_FEATURE_AUG_INS
+#if 0 // augins_stub_xdevs_install removed in Phase 1 demolition (2026-05-19)
 			// Aug-Ins modules may advertise OpenXR features (hand
-			// tracking, Ã¢â‚¬Â¦) that need a corresponding xrt_device. The
+			// tracking, ...) that need a corresponding xrt_device. The
 			// stub-xdev factory inspects the manifest aggregator and
 			// inserts placeholder xdevs into static_roles AND registers
 			// them with the space overseer (so xrLocateHandJointsEXT
-			// Ã¢â€ â€™ space_locate_device doesn't fault) before the shm
+			// -> space_locate_device doesn't fault) before the shm
 			// state is published to clients.
 			augins_stub_xdevs_install(s->xsysd, s->xso);
 #endif

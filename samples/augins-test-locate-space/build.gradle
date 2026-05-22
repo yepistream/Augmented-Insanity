@@ -1,14 +1,5 @@
 // Copyright 2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
 // SPDX-License-Identifier: GPL-3.0-or-later
-//
-// Builds the noop sample .augins package.
-//
-//   gradlew :samples:augins-noop:packageNoopAugins   # produces build/noop.augins
-//   gradlew :samples:augins-noop:installNoopAugins   # builds + adb pushes to device
-//
-// Deliberately NOT an Android Library / com.android.application Ã¢â‚¬â€ those
-// repackage the .so into an AAR/APK and would strip our non-"lib*" name. We
-// drive the NDK CMake directly via Exec tasks instead.
 
 import java.util.Properties
 
@@ -34,20 +25,15 @@ def cmakeBin = "${sdkDir}/cmake/${rootProject.ext.cmake_version}/bin/cmake${exeE
 def ninjaBin = "${sdkDir}/cmake/${rootProject.ext.cmake_version}/bin/ninja${exeExt}"
 
 def buildOutDir = layout.buildDirectory.dir('cmake').get().asFile
-def soFile = new File(buildOutDir, 'com.augmented_insanity.samples.noop.so')
-def augInsFile = layout.buildDirectory.file('noop.augins').get().asFile
-
-// outOfProcess flavor of the runtime APK; matches the applicationIdSuffix
-// in src/xrt/targets/openxr_android/build.gradle.
+def soFile      = new File(buildOutDir, 'com.augmented_insanity.samples.test_locate_space.so')
+def augInsFile  = layout.buildDirectory.file('test-locate-space.augins').get().asFile
 def runtimePackageId = 'com.augmented_insanity.runtime.out_of_process'
 
-tasks.register('configureNoop', Exec) {
+tasks.register('configureModule', Exec) {
     inputs.file 'CMakeLists.txt'
-    inputs.file 'noop.cpp'
+    inputs.file 'locate_space_module.cpp'
     outputs.file new File(buildOutDir, 'CMakeCache.txt')
-
     doFirst { buildOutDir.mkdirs() }
-
     commandLine cmakeBin,
         '-G', 'Ninja',
         "-DCMAKE_TOOLCHAIN_FILE=${ndkRoot}/build/cmake/android.toolchain.cmake",
@@ -59,35 +45,29 @@ tasks.register('configureNoop', Exec) {
         '-B', buildOutDir.absolutePath
 }
 
-tasks.register('buildNoop', Exec) {
-    dependsOn 'configureNoop'
-    inputs.file 'noop.cpp'
+tasks.register('buildModule', Exec) {
+    dependsOn 'configureModule'
+    inputs.file 'locate_space_module.cpp'
     outputs.file soFile
     commandLine cmakeBin, '--build', buildOutDir.absolutePath
 }
 
-tasks.register('packageNoopAugins', Zip) {
-    dependsOn 'buildNoop'
-    archiveFileName = 'noop.augins'
+tasks.register('packageAugins', Zip) {
+    dependsOn 'buildModule'
+    archiveFileName = 'test-locate-space.augins'
     destinationDirectory = layout.buildDirectory
     from(buildOutDir) {
         include '*.so'
     }
     from('.') {
-        include 'metadata.json', 'settings.json'
+        include 'metadata.json'
     }
 }
 
-// Pushing into /sdcard/Android/data/<pkg>/files/ has been blocked since
-// Android 11 (scoped storage). Instead: push to /data/local/tmp/ Ã¢â‚¬â€ which
-// is always world-readable and adb-writable Ã¢â‚¬â€ then `run-as` the debuggable
-// runtime APK to copy the file into its private files/modules/ dir.
-tasks.register('installNoopAugins') {
-    dependsOn 'packageNoopAugins'
-
+tasks.register('installAugins') {
+    dependsOn 'packageAugins'
     doLast {
-        def tmpRemote = "/data/local/tmp/noop.augins"
-
+        def tmpRemote = "/data/local/tmp/test-locate-space.augins"
         exec { commandLine 'adb', 'push', augInsFile.absolutePath, tmpRemote }
         exec {
             commandLine 'adb', 'shell',
@@ -95,11 +75,10 @@ tasks.register('installNoopAugins') {
         }
         exec {
             commandLine 'adb', 'shell',
-                "run-as ${runtimePackageId} cp ${tmpRemote} files/modules/noop.augins"
+                "run-as ${runtimePackageId} cp ${tmpRemote} files/modules/test-locate-space.augins"
         }
         exec { commandLine 'adb', 'shell', "rm ${tmpRemote}" }
-
-        println "Pushed noop.augins into ${runtimePackageId}/files/modules/"
+        println "Pushed test-locate-space.augins into ${runtimePackageId}/files/modules/"
     }
 }
 

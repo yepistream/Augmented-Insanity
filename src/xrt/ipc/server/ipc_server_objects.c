@@ -1,5 +1,5 @@
 // Copyright 2025-2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
-// SPDX-License-Identifier: BSL-1.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 /*!
  * @file
  * @brief Tracking objects to IDs.
@@ -8,6 +8,7 @@
  */
 
 #include "xrt/xrt_device.h"
+#include "xrt/xrt_system.h"
 #include "xrt/xrt_tracking.h"
 
 #include "shared/ipc_protocol.h"
@@ -15,6 +16,7 @@
 #include "server/ipc_server_objects.h"
 
 #include <assert.h>
+#include <stdbool.h>
 #include <string.h>
 
 
@@ -43,6 +45,30 @@ ipc_server_objects_get_xdev_and_validate(volatile struct ipc_client_state *ics,
 	*out_xdev = xdev;
 
 	return XRT_SUCCESS;
+}
+
+// Aug-Ins helper: identify whether the xdev at `id` fills the system's
+// head role. Used by aug_adapter_space_locate_device to filter module
+// dispatch to head-pose queries only (v0.2 base; non-head device roles
+// are a v0.2.x parking-lot item).
+//
+// Returns true only on a clean head-role match. False on: invalid id,
+// NULL xdev slot, NULL static_roles.head, mismatch. NEVER fatal -- the
+// caller falls back to runtime default on false.
+bool
+ipc_server_xdev_is_head_role(volatile struct ipc_client_state *ics, uint32_t id)
+{
+	if (ics == NULL || ics->server == NULL || ics->server->xsysd == NULL) {
+		return false;
+	}
+	if (id >= XRT_SYSTEM_MAX_DEVICES) {
+		return false;
+	}
+	struct xrt_device *xdev = ics->objects.xdevs[id];
+	if (xdev == NULL) {
+		return false;
+	}
+	return xdev == ics->server->xsysd->static_roles.head;
 }
 
 xrt_result_t

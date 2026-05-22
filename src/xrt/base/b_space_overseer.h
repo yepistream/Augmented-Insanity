@@ -1,6 +1,6 @@
 // Copyright 2023, Collabora, Ltd.
 // Copyright 2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
-// SPDX-License-Identifier: BSL-1.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 /*!
  * @file
  * @brief A implementation of the @ref xrt_space_overseer interface.

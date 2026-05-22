@@ -34,12 +34,12 @@ extern "C" {
  *   an action set is destroyed.
  * - @ref suggested_profiles: Interaction profile bindings suggested by the app
  *   via xrSuggestInteractionProfileBindings. When the app calls
- *   xrAttachSessionActionSets, this array is cloned into the sessionâ€™s action
+ *   xrAttachSessionActionSets, this array is cloned into the session’s action
  *   context so the runtime can apply those suggestions for that session.
  *
  * In a future extension, this context is intended to support namespaced action
  * sets and to allow plugins (e.g. in a game) to suggest their own bindings
- * without affecting the main applicationâ€™s bindings.
+ * without affecting the main application’s bindings.
  *
  * @ingroup oxr_main
  */

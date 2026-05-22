@@ -51,11 +51,16 @@ $NewSpdx = "SPDX-License-Identifier: GPL-3.0-or-later"
 $GplHeaderFiles = @(
     "src/xrt/ipc/shared/proto.py",
     "src/xrt/ipc/server/ipc_server_process.c",
+    "src/xrt/ipc/server/ipc_server_objects.h",
+    "src/xrt/ipc/server/ipc_server_objects.c",
     "src/xrt/include/tracking/t_hand_tracking.h",
     "src/xrt/drivers/ht/ht_driver.c",
     "src/xrt/tracking/hand/t_hand_tracking_async.c",
+    "src/xrt/base/b_space_overseer.h",
     "src/xrt/targets/openxr_android/build.gradle",
     "src/xrt/targets/openxr_android/src/outOfProcess/AndroidManifest.xml",
+    "src/xrt/targets/openxr_android/src/outOfProcess/java/com/augmented_insanity/runtime/AugInsBridge.kt",
+    "src/xrt/targets/openxr_android/src/outOfProcess/java/com/augmented_insanity/runtime/AugInsTestActivity.kt",
     "src/xrt/targets/service-lib/service_target.cpp"
 )
 
@@ -65,9 +70,9 @@ $GplHeaderFiles = @(
 # explicitly listed in $SkipFiles to escape relicensing.
 $GplHeaderDirs = @(
     "src/xrt/augins",
-    "samples/augins-noop",
     "samples/augins-arcore-headpose",
-    "samples/augins-mercury-handtracking-arcore",
+    "samples/augins-test-noop",
+    "samples/augins-test-locate-space",
     "module-example"
 )
 

@@ -5,244 +5,166 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Module Example Walkthrough
 
-A line-by-line tour of `module-example/augins-head-sway/`, the
-featured tutorial module. Build it once, install it, observe the
-silly visual result, then come back here and read the source.
+`module-example/augins-head-sway/` is the tutorial module. It does
+one thing: add a sinusoidal X-offset to the head pose returned by
+the runtime, so any XR app rendering on this runtime sees the
+view sway left and right by 0.3 m every 4 seconds.
 
-## What it does
+It is the simplest possible v0.2 module that produces a visible
+effect. Standalone NDK build, no external SDK dependencies, no
+worker threads, ~50 lines of C++ in the dispatched function plus
+two short lifecycle hooks.
 
-The module hooks the IPC dispatch path the runtime uses for per-xdev
-tracked-pose queries. When a query arrives for the head xdev's
-`XRT_INPUT_GENERIC_HEAD_POSE` input, the module reads the
-runtime's computed reply, adds a sinusoidal X-axis offset to the
-position component, and writes the modified pose back. The visual
-result: the rendered scene's head pose sways left-right at 4 second
-period and 0.3 m amplitude.
-
-## File layout
+## Files
 
 ```
 module-example/augins-head-sway/
-    metadata.json        manifest
-    settings.json        empty placeholder
-    head_sway.cpp        the entire module, ~150 lines
-    CMakeLists.txt       standalone NDK build
-    build.gradle         Gradle Zip task
-    LICENSE.txt          GPL-3.0-or-later text
-    README.md            user-facing instructions
+  +-- metadata.json
+  +-- settings.json
+  +-- head_sway.cpp
+  +-- CMakeLists.txt
+  +-- build.gradle
 ```
 
-## metadata.json
+The build packages these into `head-sway.augins` along with the
+GPL-3.0-or-later license body copied from `LICENSES/`.
+
+## `metadata.json`
 
 ```json
 {
-    "Name": "Aug-Ins Head-Sway Example",
+    "Manifest_Version": 1,
     "ID": "com.augmented_insanity.examples.head_sway",
-    "Version": "0.1.0",
-    "Description": "Tutorial module. Adds a sinusoidal X-axis offset...",
-    "Dependencies": [],
-    "Advertised_OpenXR_Features": {
-        "Extensions": [],
-        "InteractionProfiles": [],
-        "SystemPropertyBits": []
-    },
+    "Version": "0.2.0",
+    "Name": "Aug-Ins Head Sway Example",
+    "Description": "Tutorial module. Adds a sinusoidal X-offset ...",
+    "Priority": 200,
     "Implemented_Functions": [
-        "aug_deviceGetTrackedPose"
+        "aug_LocateDeviceInSpace"
     ]
 }
 ```
 
-Notable choices:
+Field-by-field reference: [Manifest-Schema](Manifest-Schema.md).
 
-- `ID` is reverse-DNS, distinct from the production samples. The
-  module's `.so` will be named exactly
-  `com.augmented_insanity.examples.head_sway.so`.
-- `Dependencies` is empty -- the module depends on nothing else.
-- `Advertised_OpenXR_Features` is empty -- the module does not
-  bring any new OpenXR features. It only modifies what the runtime
-  is already returning.
-- `Implemented_Functions` lists exactly one hook,
-  `aug_deviceGetTrackedPose`. That is the synthetic name for the
-  IPC `device_get_tracked_pose` call (see
-  [IPC Hook Dispatch](IPC-Hook-Dispatch.md)).
+The `Priority` is `200`, deliberately higher than the ARCore
+module's `100`. The dispatch chain runs lower-priority modules
+first (Q4) and the last write wins (Q1), so when both modules
+are installed the order is ARCore (writes 6DoF pose) -> head-sway
+(adds X-offset to whatever was written). Reverse the priorities
+and the sway would be replaced by ARCore's pose instead of being
+added to it.
 
-## head_sway.cpp -- the structure
+## `settings.json`
 
-The single C++ file has four sections:
-
-1. Includes and constants.
-2. Mirror structs that match the IPC msg/reply layout.
-3. Module globals and helpers.
-4. The `extern "C"` lifecycle and hook functions.
-
-### Includes
-
-```cpp
-#include "augins_module_abi.h"   // aug_host_api, AUG_OK, etc.
-#include "xrt/xrt_defines.h"     // xrt_pose, xrt_space_relation, XRT_INPUT_GENERIC_HEAD_POSE
-```
-
-`augins_module_abi.h` is the only header a module is required to
-include. It transitively pulls in `xrt/xrt_defines.h`, but the
-explicit second include makes the dependency obvious.
-
-### Constants
-
-```cpp
-constexpr float kSwayPeriodSeconds   = 4.0f;
-constexpr float kSwayAmplitudeMeters = 0.30f;
-constexpr float kTwoPi               = 6.283185307179586f;
-```
-
-Tunables. Edit and rebuild to change the look. 4 s period and 30 cm
-amplitude is large enough to be obvious, small enough not to
-nauseate.
-
-### Mirror structs
-
-```cpp
-struct head_sway_msg_dev_get_tracked_pose
+```json
 {
-    int32_t  cmd;
-    uint32_t id;
-    int32_t  name;
-    int64_t  at_timestamp;
-};
-
-struct head_sway_reply_relation
-{
-    int32_t                   result;
-    struct xrt_space_relation relation;
-};
-```
-
-The runtime owns the layout of `ipc_device_get_tracked_pose_msg`
-and `ipc_device_get_tracked_pose_reply`. A module cannot include
-the generated header (`ipc_protocol_generated.h`) because that
-header is built with the runtime's specific IPC protocol version
-and bringing it into a module build is fragile.
-
-The pragmatic alternative: redeclare just the fields you need in
-layouts that match byte-for-byte. The first struct gets us at
-`name` (so we can filter to only the head pose); the second gets us
-at `relation` (so we can read what the runtime put there).
-
-If the runtime's IPC schema ever changes incompatibly, this
-module's filter will mismatch and the hook will silently no-op --
-the runtime keeps working, the module just stops doing anything
-visible. Safer than crashing.
-
-### Module globals
-
-```cpp
-static const struct aug_host_api *g_host = nullptr;
-static std::atomic<int64_t> g_t0_ns{0};
-
-static int64_t monotonic_ns_now() {
-    using clock = std::chrono::steady_clock;
-    auto d = clock::now().time_since_epoch();
-    return std::chrono::duration_cast<std::chrono::nanoseconds>(d).count();
 }
 ```
 
-`g_host` is the host API table; cached at `aug_onModuleLoad` time
-and used later for `set_locate_space_relation`.
+Empty. The field exists in the schema for forward compatibility
+with the planned v0.2.2 settings UI; v0.2 base has no consumer.
 
-`g_t0_ns` is the steady-clock reference for the sway phase. By
-capturing it at module load, the sway starts at zero offset and is
-deterministic across launches.
+## `head_sway.cpp`
 
-### `aug_onModuleLoad`
+The module exports three symbols.
 
-```cpp
-extern "C" void
-aug_onModuleLoad(void *args)
+### `aug_on_module_load`
+
+```c
+int aug_on_module_load(const struct aug_host_api *host)
 {
-    const auto *api = static_cast<const struct aug_host_api *>(args);
-    if (api == nullptr || api->version < 1u) {
-        LOGE("aug_onModuleLoad: host API too old");
-        return;
+    if (host == nullptr || host->struct_version < AUG_HOST_API_VERSION) {
+        return 1;
     }
-    g_host = api;
-    g_t0_ns.store(monotonic_ns_now(), std::memory_order_release);
-    LOGI("aug_onModuleLoad: host API v%u accepted", api->version);
+    g_start_time = std::chrono::steady_clock::now();
+    LOGI("aug_on_module_load: head-sway armed (amplitude=%.2f m, period=%.2f s)",
+         kSwayAmplitudeM, kSwayPeriodS);
+    return 0;
 }
 ```
 
-Three things every module's `aug_onModuleLoad` should do:
+Validates the runtime's host API is at least v1 (the minimum
+required). Captures the monotonic start time so the sinusoidal
+phase starts at zero on every service start. Returns 0 to accept
+the module; non-zero would reject it.
 
-1. Cast `args` to `const struct aug_host_api *`.
-2. Verify the version is high enough. The module uses only
-   `set_locate_space_relation` which is in 1.0; we require >= 1.0
-3. Store the pointer in a module global.
+No need to cache the `host` pointer here -- the dispatched
+function uses none of the host API entries. A more typical
+module would store `g_host = host` for later use.
 
-If the version check fails, just `return` without storing -- the
-runtime sees that `g_host` is still `nullptr` later and the hook
-no-ops.
+### `aug_on_module_unload`
 
-### The hook
-
-```cpp
-extern "C" int32_t
-aug_deviceGetTrackedPose(void *ics, void *msg, void *reply, void *unused)
+```c
+void aug_on_module_unload(void)
 {
-    (void)ics;
-    (void)unused;
-    if (g_host == nullptr || msg == nullptr || reply == nullptr) {
-        return AUG_OK;
-    }
-
-    const auto *m = static_cast<const struct head_sway_msg_dev_get_tracked_pose *>(msg);
-    if (m->name != static_cast<int32_t>(XRT_INPUT_GENERIC_HEAD_POSE)) {
-        return AUG_OK;
-    }
-
-    const auto *r = static_cast<const struct head_sway_reply_relation *>(reply);
-    struct xrt_space_relation rel = r->relation;
-
-    int64_t t0 = g_t0_ns.load(std::memory_order_acquire);
-    float t_seconds = (monotonic_ns_now() - t0) / 1e9f;
-    float phase = (kTwoPi * t_seconds) / kSwayPeriodSeconds;
-    rel.pose.position.x += kSwayAmplitudeMeters * std::sin(phase);
-
-    g_host->set_locate_space_relation(reply, &rel);
-    return AUG_OK;
+    LOGI("aug_on_module_unload: head-sway disarmed");
 }
 ```
 
-Anatomy:
+Logs and returns. The module spawned no worker threads, holds no
+OS resources, owns no JNI global refs; there is nothing to clean
+up.
 
-- **Cheap-out checks.** Always handle the case where pointers are
-  unexpectedly null. Cheap. Keeps the runtime alive if something
-  upstream goes wrong.
-- **Filter on `name`.** The hook fires for every per-xdev
-  tracked-pose query: head, hand-tracker xdevs, controllers (when
-  they exist). We want to perturb only the head pose. The
-  `XRT_INPUT_GENERIC_HEAD_POSE` enum value identifies it.
-- **Read the reply.** The runtime has already filled in
-  `reply->relation`. We read it through the mirror struct.
-- **Compute and apply the offset.** Standard sinusoid.
-- **Write back via the host API.** `set_locate_space_relation`
-  writes our modified relation into the reply struct AND sets
-  `result = XRT_SUCCESS`. The runtime then sends the modified
-  reply to the client.
+### `aug_LocateDeviceInSpace`
 
-`return AUG_OK` tells the runtime "continue dispatching to the
-next module's hook". If we returned `AUG_FATAL_MODULE`, our
-module would be removed from the dispatch table.
+```c
+XRAPI_ATTR XrResult XRAPI_CALL
+aug_LocateDeviceInSpace(XrSpace          baseSpace,
+                        XrTime           time,
+                        XrSpaceLocation *location)
+{
+    if (location == nullptr) {
+        return XR_ERROR_VALIDATION_FAILURE;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const float t = std::chrono::duration<float>(now - g_start_time).count();
+    const float omega = 2.0f * static_cast<float>(M_PI) / kSwayPeriodS;
+    const float dx = kSwayAmplitudeM * std::sin(omega * t);
+    location->pose.position.x += dx;
+    return XR_SUCCESS;
+}
+```
 
-## CMakeLists.txt
+The runtime adapter passed `location` with the baseline pose
+already filled in (Q2: runtime default runs before modules).
+This function decorates that pose with a sinusoidal X-offset
+rather than producing a pose from scratch -- canonical decorator
+pattern.
 
-The interesting bits:
+`baseSpace` and `time` are unused. A more sophisticated module
+would inspect them: `baseSpace` to apply different transforms in
+different reference-space frames, `time` to drive an animation
+phase off the XR-app-requested predicted display time instead of
+host monotonic time. For a tutorial demonstration, ignoring them
+keeps the code short.
+
+Why the function name is `aug_LocateDeviceInSpace` and not
+`xrLocateViews`: see [Service-Side-Dispatch](Service-Side-Dispatch.md).
+The IPC layer carries one head-locate-in-space call per view, so
+the function signature matches that narrower shape, not the
+top-level multi-view `xrLocateViews` shape.
+
+## `CMakeLists.txt`
 
 ```cmake
+cmake_minimum_required(VERSION 3.22)
+project(augins-head-sway LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 set(AUG_RUNTIME_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../../src/xrt/augins")
-set(XRT_PUBLIC_INCLUDE  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/xrt/include")
+set(OPENXR_INCLUDE      "${CMAKE_CURRENT_SOURCE_DIR}/../../src/external/openxr_includes")
+
+add_library(head_sway_module SHARED head_sway.cpp)
 
 target_include_directories(head_sway_module PRIVATE
-    ${AUG_RUNTIME_INCLUDE}    # augins_module_abi.h
-    ${XRT_PUBLIC_INCLUDE}     # xrt/xrt_defines.h
+    ${AUG_RUNTIME_INCLUDE}    # module_abi.h
+    ${OPENXR_INCLUDE}         # <openxr/openxr.h>
     )
+
+target_link_libraries(head_sway_module PRIVATE log)
 
 set_target_properties(head_sway_module PROPERTIES
     PREFIX ""
@@ -251,41 +173,95 @@ set_target_properties(head_sway_module PROPERTIES
     )
 ```
 
-Reaches sideways into the runtime tree for the two headers we
-need. The `PREFIX ""` and `OUTPUT_NAME` lines force the `.so` to
-be named exactly `<module-id>.so`, which is what the loader
-expects.
+Three things matter here:
 
-## build.gradle
+- The include paths pull `module_abi.h` (the v0.2 module ABI
+  header) and `<openxr/openxr.h>` from inside the repo. A
+  third-party module shipping outside the Aug-Ins repo would
+  copy `module_abi.h` into its own tree and use whatever OpenXR
+  headers it has.
+- `PREFIX ""` plus an explicit `OUTPUT_NAME` and `SUFFIX ".so"`
+  produces the file as exactly `<ID from metadata.json>.so`,
+  not `lib<ID>.so`. The loader does
+  `dlopen("<ID>.so", ...)`; the `lib` prefix would break the
+  match.
+- No `target_link_libraries` beyond `log`. The module needs
+  nothing from `aug_host_api` and never touches the host API
+  beyond reading `struct_version`.
 
-A thin wrapper that calls `cmake` and `ninja` via Exec tasks, then
-zips the result. See
-`module-example/augins-head-sway/build.gradle` for the source. The
-key tasks:
+## `build.gradle`
 
-- `configureHeadSway` -> runs CMake.
-- `buildHeadSway` -> runs Ninja.
-- `packageHeadSwayAugins` -> Zip task; produces
-  `build/head-sway.augins` containing the `.so`, `metadata.json`,
-  `settings.json`, and `LICENSE.txt`.
-- `installHeadSwayAugins` -> packages and adb-pushes onto a
-  device.
+The Gradle file invokes `cmake` and `ninja` directly via `Exec`
+tasks (the Android Gradle Plugin would re-prefix the `.so` with
+`lib`, breaking the loader's `dlopen`). Its `Zip` task assembles
+the resulting `.so` plus `metadata.json` plus `settings.json`
+plus a copy of `LICENSES/GPL-3.0-or-later.txt` (renamed to
+`LICENSE.txt`) into `build/head-sway.augins`.
 
-## What you should change to write your own
+Three tasks worth knowing:
 
-Copy `module-example/augins-head-sway/` to a new directory under
-`samples/` (or your own external repo), then:
+- `packageAugins` -- builds the `.so` and produces the zip.
+- `installAugins` -- packages then pushes the zip to the
+  device's `files/modules/` via `adb` + `run-as`.
+- `clean` -- wipes the per-module `build/` tree.
 
-1. Edit `metadata.json`: change `Name`, `ID`, `Description`, and
-   the list of `Implemented_Functions` to match what your module
-   does.
-2. Edit `head_sway.cpp` -> rename to your module's primary
-   source file, replace the sway logic with whatever your module
-   actually does.
-3. Edit `CMakeLists.txt`: change `OUTPUT_NAME` to match your
-   `metadata.json::ID`.
-4. Edit `build.gradle`: search-replace `HeadSway` ->
-   `<YourModule>` and `head-sway.augins` -> `<your-module>.augins`.
-5. Add a project entry in `settings.gradle`.
+See [Building-A-Module](Building-A-Module.md) for the same
+build pattern explained in template form.
 
-That is the complete recipe.
+## Build, install, observe
+
+```
+.\gradlew.bat :module-example:augins-head-sway:installAugins
+adb shell am force-stop com.augmented_insanity.runtime.out_of_process
+adb shell am start-foreground-service \
+    -a org.freedesktop.monado.ipc.CONNECT \
+    -n com.augmented_insanity.runtime.out_of_process/org.freedesktop.monado.ipc.MonadoService
+adb logcat -s "Aug-Ins.Loader:V" "Aug-Ins.Lifecycle:V" "Aug-Ins.HeadSway:V"
+```
+
+The expected loader output:
+
+```
+I Aug-Ins.Loader:    loaded module 'com.augmented_insanity.examples.head_sway' v0.2.0 (priority=200, 1/1 functions resolved)
+I Aug-Ins.HeadSway:  aug_on_module_load: head-sway armed (amplitude=0.30 m, period=4.00 s)
+I Aug-Ins.Lifecycle: module 'com.augmented_insanity.examples.head_sway': aug_on_module_load OK
+```
+
+Launching any OpenXR app on the device produces a visible
+left-right sway in the rendered scene with a 4-second period.
+
+## Combining with other modules
+
+With both `arcore-headpose.augins` (Priority 100) and
+`head-sway.augins` (Priority 200) installed, the dispatch chain
+for `aug_LocateDeviceInSpace` becomes:
+
+```
+runtime default head pose -> ARCore overrides with 6DoF tracking -> head-sway adds X-offset
+```
+
+The visible result is 6DoF head tracking plus a constant
+sinusoidal sway. Swap the priorities and head-sway runs first;
+ARCore's write then overwrites the sway and the sway disappears.
+This is the dispatch contract documented in
+[Module-System](Module-System.md) -- last write wins (Q1),
+order set by `Priority` (Q4).
+
+## Adapting this for a real module
+
+The head-sway pattern is what a "pose decorator" module looks
+like. Real modules typically:
+
+- Replace the trigonometry with state pulled from a sensor or
+  cached worker thread. See `samples/augins-arcore-headpose/`
+  for the ARCore worker thread pattern.
+- Add more exported functions (e.g. `xrLocateSpace` for
+  semantic-space queries that need the same override).
+- Use the host API entries (`get_jvm`, `get_context`,
+  `get_module_data_dir`) for asset loading and JNI access.
+- Spawn workers in `aug_on_module_load` and join them in
+  `aug_on_module_unload`.
+
+See [Building-A-Module](Building-A-Module.md) for the general
+authoring template, and [Host-API-Reference](Host-API-Reference.md)
+for what the runtime exposes to modules.

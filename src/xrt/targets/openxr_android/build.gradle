@@ -195,7 +195,7 @@ android {
 
         resValue "string", "library_openxrheaders_libraryVersion", parseOpenXRVersion("${rootDir}/src/external/openxr_includes/openxr/openxr.h")
 
-        // Aug-Ins targets modern Android ARM only â€” every device that runs the
+        // Aug-Ins targets modern Android ARM only -- every device that runs the
         // out-of-process runtime has 64-bit ARM. Skipping x86/x86_64/armv7
         // cuts native build time by ~4x. Override with -PaugInsAbis=... on
         // the Gradle command line if you actually need extra ABIs (e.g.
@@ -278,8 +278,10 @@ android {
         flavor.externalNativeBuild.cmake.arguments += "-DXRT_MODULE_MERCURY_HANDTRACKING=ON"
         flavor.externalNativeBuild.cmake.arguments += "-DXRT_BUILD_DRIVER_HANDTRACKING=ON"
 
-        flavor.externalNativeBuild.cmake.targets "openxr_monado", "augins-service",
-                "com.augmented_insanity.samples.mercury_handtracking_arcore"
+        // Phase 1 demolition (2026-05-19):
+        //   com.augmented_insanity.samples.mercury_handtracking_arcore target
+        //   removed -- the in-tree sample directory was deleted.
+        flavor.externalNativeBuild.cmake.targets "openxr_monado", "augins-service"
         flavor.buildConfigField "boolean", "inProcess", "false"
         flavor.resValue "string", "app_name", appName
     }
@@ -362,7 +364,7 @@ dependencies {
 android.productFlavors.configureEach { flavor ->
     if (flavor.name.startsWith("outOfProcess")) {
         dependencies.add("${flavor.name}Implementation", project(':src:xrt:ipc'))
-        // ARCore SDK â€” needed by the augins-arcore-headpose module which runs in
+        // ARCore SDK -- needed by the augins-arcore-headpose module which runs in
         // the service process. Adds libarcore_sdk_c.so to jniLibs and registers
         // the GPS-AR class loader so ArSession_create can find SessionCreateJniHelper.
         dependencies.add("${flavor.name}Implementation", 'com.google.ar:core:1.52.0')

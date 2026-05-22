@@ -6,7 +6,7 @@
 //   gradlew :samples:augins-arcore-headpose:packageArcoreHeadposeAugins
 //   gradlew :samples:augins-arcore-headpose:installArcoreHeadposeAugins
 //
-// Deliberately NOT an Android Library / com.android.application Ã¢â‚¬â€ those
+// Deliberately NOT an Android Library / com.android.application -- those
 // repackage the .so into an AAR/APK and would strip our non-"lib*" name. We
 // drive the NDK CMake directly via Exec tasks instead.
 

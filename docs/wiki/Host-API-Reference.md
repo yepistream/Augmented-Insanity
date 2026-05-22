@@ -5,191 +5,150 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # Host API Reference
 
-The host API is the function-pointer table the runtime hands to every
-module at `aug_onModuleLoad` time. Modules call back into the runtime
-through this table; they do not link directly against runtime symbols.
+The host API table is the function-pointer struct the runtime
+passes to `aug_on_module_load`. Modules cache the pointer and use
+it for JVM access, the per-module data path, and logging.
 
-Source-of-truth header:
-`src/xrt/augins/augins_module_abi.h`. This page summarises that header;
-when in doubt, read the header.
+Source of truth: `src/xrt/augins/module_abi.h`. The struct
+definition lives there; this page documents semantics.
 
 ## Versioning
 
+Forward-compatible by appending. The `struct_version` field bumps
+every time a function pointer is added at the end of the struct.
+v0.2 ships v1.
+
 ```c
-#define AUG_HOST_API_VERSION 2u
+#define AUG_HOST_API_VERSION 1u   // from module_abi.h
 ```
 
-Forward-compatible, additive only:
+A module checks `host->struct_version >= <minimum>` before
+reading any field that requires a higher version. v1-compatible
+modules check `>= 1`.
 
-- The runtime advertises its host-API version in the table's `version`
-  field.
-- Each module declares its required minimum version and MUST check
-  `api->version >= module_required_version` on entry to
-  `aug_onModuleLoad`. A newer runtime accepts older modules (because
-  fields are only ever added at the end). An older runtime cannot
-  serve newer modules; the module aborts itself.
-- New fields go AT THE END of `aug_host_api`. Never reorder, rename,
-  or change the meaning of an existing field -- doing so breaks every
-  installed `.augins` on disk.
+A v2 runtime accepts a v1 module (older fields are unchanged). A
+module that needs v2 fields and is handed a v1 runtime must
+reject the load by returning non-zero from `aug_on_module_load`.
 
-## Receiving the table
+## v1 fields
+
+Declarations are in `src/xrt/augins/module_abi.h`. Per-field
+semantics:
+
+### `void *(*get_jvm)(void)`
+
+Returns the runtime service process's `JavaVM *` as a `void *`.
+Cast at the call site. Returns NULL on non-Android builds (none
+exist yet; the field is reserved).
+
+Lifetime: process. Thread-safe. Do not free.
+
+### `void *(*get_context)(void)`
+
+Returns the runtime service process's Android Application Context
+as a `jobject` (cast to `void *`). Cast back to `jobject` before
+JNI use.
+
+The reference is a global ref owned by the runtime. Modules must
+not call `DeleteGlobalRef` on it. A worker thread that outlives
+`aug_on_module_load` should `NewGlobalRef` its own copy and
+manage that reference itself.
+
+Lifetime: process. Thread-safe.
+
+### `const char *(*get_module_data_dir)(void)`
+
+Returns the absolute path of the calling module's extracted assets
+directory (where the runtime unpacked the `.augins` contents).
+Used to load bundled ONNX models, calibration JSON, and any other
+files shipped inside the zip.
+
+The path is set via thread-local storage by the dispatcher around
+every call into a module. A worker thread the module spawned
+itself does not have the TLS populated and gets `""` back. Capture
+the path inside `aug_on_module_load` and stash it in a
+module-private global before spawning workers.
+
+The returned pointer is to a runtime-owned string. Do not free.
+
+### `void (*log)(int level, const char *fmt, ...)`
+
+Routes a log line through the runtime's logging system.
+
+Level mapping:
+- `0` -- trace
+- `1` -- debug
+- `2` -- info
+- `3` -- warn
+- `4` -- error
+
+Modules may use `__android_log_print` directly under their own
+tag instead; this entry exists for log style consistent with
+runtime output.
+
+Thread-safe.
+
+## Not present in v1
+
+The following exist in v0.1 but were removed and have not yet been
+re-added to v0.2:
+
+- `set_locate_space_relation` and other mirror-struct helpers.
+  The v0.1 IPC-reply-patching contract is gone; v0.2 modules
+  receive OpenXR-shaped arguments via the adapter layer.
+- `register_hand_tracker`. v0.1 stub-xdev factory hook. The
+  replacement is an `xrCreateHandTrackerEXT` adapter, scheduled
+  with the Mercury v0.2 rewrite.
+- Camera frame broker (`publish_camera_frame_y8`,
+  `subscribe_camera_frame`). v0.1 cross-module frame stream.
+  Returns when Mercury needs it (see [Roadmap](Roadmap.md)).
+- `xdev` accessors. Modules cannot query Monado xdev state
+  directly. Where "which device is this" matters, the adapter
+  filters before dispatch (e.g. `aug_LocateDeviceInSpace` fires
+  only for head queries).
+
+Entries are added to the table when a concrete module requires
+them. The table grows during v0.2.x.
+
+## Pitfalls
+
+### Detaching the main thread
+
+`aug_on_module_load` runs on the service's main Android thread,
+which the JVM has already attached. Calling
+`vm->DetachCurrentThread()` here is a JNI-spec fatal
+("attempting to detach while still running code"). Use `GetEnv`
+to fetch the existing `JNIEnv`:
 
 ```c
-extern "C" void
-aug_onModuleLoad(void *args)
-{
-    const auto *api = static_cast<const struct aug_host_api *>(args);
-    if (api == nullptr || api->version < 1u) { /* abort module */ }
-    g_host = api; // store for later use
+JNIEnv *env = NULL;
+jint rc = vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
+if (rc != JNI_OK || env == NULL) {
+    return 1; // unexpected on the main thread
+}
+// use env...
+// do NOT call DetachCurrentThread here
+```
+
+In worker threads the module spawned itself, the
+`AttachCurrentThread` / `DetachCurrentThread` pair is required.
+
+### Asset path on worker threads
+
+`get_module_data_dir()` from a module-spawned worker thread
+returns `""`. Capture the path inside `aug_on_module_load`:
+
+```c
+static std::string g_data_dir;
+
+int aug_on_module_load(const struct aug_host_api *host) {
+    g_data_dir = host->get_module_data_dir(); // populated here
+    g_worker = std::thread(worker_main);      // worker reads g_data_dir
+    return 0;
 }
 ```
 
-Cache the pointer; the table itself is valid for the lifetime of the
-runtime.
+### Host pointer lifetime
 
-## 0.1.x (unchanged in later versions)
-
-### `set_locate_space_relation(reply, relation)`
-
-```c
-void (*set_locate_space_relation)(void *reply,
-                                  const struct xrt_space_relation *relation);
-```
-
-Writes `relation` into a reply struct of type
-`struct ipc_space_locate_space_reply *` (or any IPC reply with the
-same prefix layout, currently also
-`ipc_device_get_tracked_pose_reply`). Sets `reply->result =
-XRT_SUCCESS`.
-
-The runtime owns the cast; modules pass the opaque `reply` pointer
-they received as `a2` in their hook. This is how a hook overrides
-head pose in `xrLocateSpace` or `aug_deviceGetTrackedPose`.
-
-### `get_vm()` -> `JavaVM *`
-
-```c
-void *(*get_vm)(void);
-```
-
-Returns the service process's `JavaVM *`. Cast the return value to
-`JavaVM *`. Lifetime: process. Use to attach a worker thread to the
-JVM (`vm->AttachCurrentThread(...)`).
-
-### `get_context()` -> `jobject` (Android Context)
-
-```c
-void *(*get_context)(void);
-```
-
-Returns the service process's application `Context` as a `jobject`.
-Cast the return. Lifetime: process. Wrap in a global ref before
-storing on a worker thread.
-
-## 0.2.x (additive)
-
-### `register_hand_tracker(cb, userdata)`
-
-```c
-typedef void (*aug_hand_get_joints_fn)(uint32_t handed,
-                                       int64_t at_timestamp_ns,
-                                       struct xrt_hand_joint_set *out,
-                                       int64_t *out_timestamp_ns,
-                                       void *userdata);
-
-void (*register_hand_tracker)(aug_hand_get_joints_fn cb, void *userdata);
-```
-
-Installs the producer callback for the runtime's stub hand-tracker
-xdevs. Pass `cb = NULL` to unregister; while no callback is
-registered the stub xdevs return `is_active = false` to clients.
-
-For the registration to have any effect, the calling module must
-also advertise `"Advertised_OpenXR_Features.SystemPropertyBits":
-["handTracking"]` in its manifest, so the stub xdevs are actually
-fabricated.
-
-The callback fires on the IPC server's per-client thread when a
-client invokes `xrLocateHandJointsEXT`. Implementations should not
-do heavy work inline; offload to a worker thread (see
-`samples/augins-mercury-handtracking-arcore/mercury_arcore_module.cpp`
-for the pattern).
-
-### `publish_camera_frame_y8(...)`
-
-```c
-void (*publish_camera_frame_y8)(const uint8_t *y_data,
-                                uint32_t width,
-                                uint32_t height,
-                                uint32_t stride_bytes,
-                                int64_t timestamp_ns,
-                                const struct aug_camera_intrinsics *intr);
-```
-
-Producer side of the camera-frame broker. The producer passes a
-single Y-plane luminance frame (8 bits per pixel, `stride_bytes`
-between row starts, `width * height` valid pixels). The runtime
-fans out the call to every subscriber synchronously on the
-producer's thread. Pointer is borrowed for the duration of the call;
-subscribers must memcpy if they need to retain.
-
-`intr` may be `NULL` if the producer does not yet know the camera
-intrinsics. Subscribers that need intrinsics should drop frames
-without intrinsics and wait.
-
-See [Camera Frame Broker](Camera-Frame-Broker.md) for the design
-contract.
-
-### `subscribe_camera_frame(cb, userdata)`
-
-```c
-typedef void (*aug_camera_frame_cb)(const uint8_t *y_data,
-                                    uint32_t width,
-                                    uint32_t height,
-                                    uint32_t stride_bytes,
-                                    int64_t timestamp_ns,
-                                    const struct aug_camera_intrinsics *intr,
-                                    void *userdata);
-
-void (*subscribe_camera_frame)(aug_camera_frame_cb cb, void *userdata);
-```
-
-Subscriber side of the camera-frame broker. Pass `cb = NULL` (with
-the same `userdata`) to unsubscribe. Capped at 8 simultaneous
-subscribers.
-
-### `get_module_data_dir()` -> `const char *`
-
-```c
-const char *(*get_module_data_dir)(void);
-```
-
-Returns the per-module extraction directory of the *calling* module
--- the directory the `.augins` zip was unpacked into. Use it to
-load assets bundled inside the zip (ONNX models, calibration
-JSON, etc.).
-
-Lifetime: process; do not free.
-
-**Implementation note:** the runtime uses thread-local state set
-during lifecycle dispatch, so this only returns the right value
-when called *from* a module lifecycle callback
-(`aug_onModuleLoad`, `aug_onConnect`, `aug_runtimeFinished`, ...).
-If you need the dir on a worker thread, capture it inside
-`aug_onModuleLoad` and store it in a module global. Calling from
-threads outside lifecycle dispatch returns the empty string.
-
-## Return-code contract for hooks
-
-Every IPC hook returns `int32_t`:
-
-| Value | Name | Meaning |
-|------:|------|---------|
-| `0` | `AUG_OK` | Success. Runtime continues to the next module. |
-| `-1` | `AUG_FATAL_RUNTIME` | Aborts the whole runtime process. |
-| `-2` | `AUG_FATAL_MODULE` | Removes this module from the dispatch table; other modules continue. |
-| `> 0` | -- | Developer-defined warning. Logged, then continue. |
-| `< -2` | -- | Developer-defined error. Logged, then continue. |
-
-`AUG_OK` is the right answer 99% of the time. Reserve the fatals for
-truly unrecoverable conditions.
+The host pointer is valid until `aug_on_module_unload` returns.
+Workers must be joined inside the unload hook.

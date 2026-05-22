@@ -1,12 +1,11 @@
 {
-    "Name": "Aug-Ins ARCore Head Pose",
+    "Manifest_Version": 1,
     "ID": "com.augmented_insanity.samples.arcore_headpose",
-    "Version": "0.1.0",
-    "Description": "Provides head pose via Google ARCore. Hooks xrLocateSpace(view, base=local) and writes the ARCore-tracked pose into the IPC reply. Requires Google Play Services for AR installed on the device.",
-    "Advertised_Extensions": [],
+    "Version": "0.2.0",
+    "Name": "Aug-Ins ARCore Head Pose",
+    "Description": "Provides 6DoF head pose via Google ARCore. Exports aug_LocateDeviceInSpace; whenever the IPC dispatcher routes a space_locate_device call for the head xdev through the v0.2 adapter, this module overwrites the XrSpaceLocation with the latest ARCore-tracked pose. Requires Google Play Services for AR installed on the device.",
+    "Priority": 100,
     "Implemented_Functions": [
-        "aug_spaceCreateSemanticIds",
-        "xrLocateSpace",
-        "aug_deviceGetTrackedPose"
+        "aug_LocateDeviceInSpace"
     ]
 }

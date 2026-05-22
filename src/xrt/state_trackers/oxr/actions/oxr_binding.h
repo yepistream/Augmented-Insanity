@@ -69,7 +69,7 @@ oxr_binding_find_bindings_from_act_key(struct oxr_logger *log,
 /*!
  * Suggest bindings for an interaction profile. Finds or creates the profile
  * for the given path, resets its binding keys, applies the suggested
- * actionâ€“path bindings and takes ownership of the given dpad state.
+ * action–path bindings and takes ownership of the given dpad state.
  *
  * @param log Logger
  * @param store Path store; paths may be created in the store.

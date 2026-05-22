@@ -93,7 +93,7 @@ ht_async_mainloop(void *ptr)
 #if defined(__linux__) || defined(__ANDROID__)
 	// Lower this thread's scheduling priority. Hand-tracking inference
 	// (Mercury / ONNX) is heavy and will preempt time-sensitive consumers
-	// of the same camera stream â€” most importantly ARCore VIO running in
+	// of the same camera stream -- most importantly ARCore VIO running in
 	// the same Aug-Ins service process. With nice = +10 the kernel CFS
 	// scheduler treats us as background work; ARCore's feature-extraction
 	// and IMU-fusion threads (default nice 0) get CPU slices first and
@@ -101,7 +101,7 @@ ht_async_mainloop(void *ptr)
 	// thread"; on Linux that's per-thread, not per-process, so it does not
 	// affect ARCore.
 	if (setpriority(PRIO_PROCESS, 0, 10) != 0) {
-		U_LOG_W("ht_async: setpriority nice +10 failed (errno %d) â€” "
+		U_LOG_W("ht_async: setpriority nice +10 failed (errno %d) -- "
 		        "Mercury inference may starve real-time consumers",
 		        errno);
 	}

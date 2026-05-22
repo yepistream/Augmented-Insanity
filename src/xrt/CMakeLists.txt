@@ -15,6 +15,8 @@ add_subdirectory(state_trackers)
 if(XRT_MODULE_IPC)
 	add_subdirectory(ipc)
 endif()
+# Aug-Ins v0.2 service-side module subsystem. Phase 2a baseline
+# (scaffolding) -- see src/xrt/augins/CMakeLists.txt for the contents.
 if(XRT_FEATURE_AUG_INS)
 	add_subdirectory(augins)
 endif()

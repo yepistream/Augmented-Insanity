@@ -68,7 +68,7 @@ struct xrt_future_result
  * Each thread that references an xrt_future must properly manage the reference count using
  * @ref xrt_future_reference when entering and exiting the thread's scope.
  *
- * @see "Server-side / driver â€” implementing async callbacks" in @ref async for producer example
+ * @see "Server-side / driver — implementing async callbacks" in @ref async for producer example
  * code
  */
 struct xrt_future

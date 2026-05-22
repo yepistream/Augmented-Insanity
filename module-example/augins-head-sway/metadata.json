@@ -1,15 +1,11 @@
 {
-    "Name": "Aug-Ins Head-Sway Example",
+    "Manifest_Version": 1,
     "ID": "com.augmented_insanity.examples.head_sway",
-    "Version": "0.1.0",
-    "Description": "Tutorial module. Adds a sinusoidal X-axis offset to the head pose returned by aug_deviceGetTrackedPose, producing an obvious side-to-side swaying motion of the rendered scene. See module-example/augins-head-sway/README.md.",
-    "Dependencies": [],
-    "Advertised_OpenXR_Features": {
-        "Extensions": [],
-        "InteractionProfiles": [],
-        "SystemPropertyBits": []
-    },
+    "Version": "0.2.0",
+    "Name": "Aug-Ins Head Sway Example",
+    "Description": "Tutorial module. Adds a sinusoidal X-offset to the head pose returned by the runtime, swaying the view left and right with a 0.3 m amplitude and 4 second period. Exports aug_LocateDeviceInSpace; the runtime's adapter filters to head xdev only. Standalone NDK build with no external SDK dependencies.",
+    "Priority": 200,
     "Implemented_Functions": [
-        "aug_deviceGetTrackedPose"
+        "aug_LocateDeviceInSpace"
     ]
 }

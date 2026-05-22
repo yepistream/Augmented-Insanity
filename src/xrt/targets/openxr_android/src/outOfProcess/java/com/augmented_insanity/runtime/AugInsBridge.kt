@@ -1,5 +1,5 @@
 // Copyright 2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
-// SPDX-License-Identifier: BSL-1.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 /*!
  * Diagnostic bridge between the Aug-Ins test UI and the native augins-service
  * library. All native methods are implemented in
@@ -7,7 +7,7 @@
  *
  * The native side reads global state inside the augins-service shared library;
  * since the Activity and the IPC Service run in the same process, both see the
- * same module list. Methods are safe to call before the GRS has launched â€”
+ * same module list. Methods are safe to call before the GRS has launched --
  * they return zero/empty.
  */
 package com.augmented_insanity.runtime

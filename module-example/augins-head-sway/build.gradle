@@ -3,15 +3,16 @@
 //
 // Builds the head-sway tutorial .augins package.
 //
-//   gradlew :module-example:augins-head-sway:packageHeadSwayAugins
-//      produces build/head-sway.augins
-//   gradlew :module-example:augins-head-sway:installHeadSwayAugins
-//      builds + adb pushes to device
+//   gradlew :module-example:augins-head-sway:packageAugins
+//      -> build/head-sway.augins
+//   gradlew :module-example:augins-head-sway:installAugins
+//      -> packageAugins, then adb push + run-as cp into the runtime's
+//         /data/data/.../files/modules/ where the service loader picks
+//         it up on next service start.
 //
-// Pattern lifted from samples/augins-noop/build.gradle. Standalone NDK
-// CMake -- not an Android Library / com.android.application target, because
-// AGP would repackage the .so into an AAR/APK and strip our non-"lib*"
-// output name.
+// Standalone NDK CMake (not an Android Library / com.android.app --
+// AGP would repackage the .so into an AAR/APK and strip the non-
+// "lib*" output name the loader requires).
 
 import java.util.Properties
 
@@ -37,18 +38,15 @@ def cmakeBin = "${sdkDir}/cmake/${rootProject.ext.cmake_version}/bin/cmake${exeE
 def ninjaBin = "${sdkDir}/cmake/${rootProject.ext.cmake_version}/bin/ninja${exeExt}"
 
 def buildOutDir = layout.buildDirectory.dir('cmake').get().asFile
-def soFile = new File(buildOutDir, 'com.augmented_insanity.examples.head_sway.so')
-def augInsFile = layout.buildDirectory.file('head-sway.augins').get().asFile
-
+def soFile      = new File(buildOutDir, 'com.augmented_insanity.examples.head_sway.so')
+def augInsFile  = layout.buildDirectory.file('head-sway.augins').get().asFile
 def runtimePackageId = 'com.augmented_insanity.runtime.out_of_process'
 
-tasks.register('configureHeadSway', Exec) {
+tasks.register('configureModule', Exec) {
     inputs.file 'CMakeLists.txt'
     inputs.file 'head_sway.cpp'
     outputs.file new File(buildOutDir, 'CMakeCache.txt')
-
     doFirst { buildOutDir.mkdirs() }
-
     commandLine cmakeBin,
         '-G', 'Ninja',
         "-DCMAKE_TOOLCHAIN_FILE=${ndkRoot}/build/cmake/android.toolchain.cmake",
@@ -60,33 +58,35 @@ tasks.register('configureHeadSway', Exec) {
         '-B', buildOutDir.absolutePath
 }
 
-tasks.register('buildHeadSway', Exec) {
-    dependsOn 'configureHeadSway'
+tasks.register('buildModule', Exec) {
+    dependsOn 'configureModule'
     inputs.file 'head_sway.cpp'
     outputs.file soFile
     commandLine cmakeBin, '--build', buildOutDir.absolutePath
 }
 
-tasks.register('packageHeadSwayAugins', Zip) {
-    dependsOn 'buildHeadSway'
+tasks.register('packageAugins', Zip) {
+    dependsOn 'buildModule'
     archiveFileName = 'head-sway.augins'
     destinationDirectory = layout.buildDirectory
     from(buildOutDir) {
         include '*.so'
     }
     from('.') {
-        include 'metadata.json', 'settings.json', 'LICENSE.txt'
+        include 'metadata.json', 'settings.json'
+    }
+    // Ship the GPL-3.0-or-later text inside the zip so the .augins is
+    // self-contained for redistribution per the license terms.
+    from("${rootDir}/LICENSES") {
+        include 'GPL-3.0-or-later.txt'
+        rename { 'LICENSE.txt' }
     }
 }
 
-// Pushes via /data/local/tmp + run-as, like the other samples. Requires the
-// runtime APK to be installed and debuggable.
-tasks.register('installHeadSwayAugins') {
-    dependsOn 'packageHeadSwayAugins'
-
+tasks.register('installAugins') {
+    dependsOn 'packageAugins'
     doLast {
         def tmpRemote = "/data/local/tmp/head-sway.augins"
-
         exec { commandLine 'adb', 'push', augInsFile.absolutePath, tmpRemote }
         exec {
             commandLine 'adb', 'shell',
@@ -97,7 +97,6 @@ tasks.register('installHeadSwayAugins') {
                 "run-as ${runtimePackageId} cp ${tmpRemote} files/modules/head-sway.augins"
         }
         exec { commandLine 'adb', 'shell', "rm ${tmpRemote}" }
-
         println "Pushed head-sway.augins into ${runtimePackageId}/files/modules/"
     }
 }

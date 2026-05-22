@@ -147,6 +147,9 @@ target_include_directories(
 	)
 target_link_libraries(ipc_server PRIVATE aux_util aux_util_process aux_util_debug_gui ipc_shared)
 
+# Aug-Ins v0.2 service-side module subsystem. Phase 2a: link in the
+# scaffolding so future Phase 2d adapter dispatch (generated into
+# ipc_server_generated.c) can consult aug_has_modules_for().
 if(XRT_FEATURE_AUG_INS)
 	target_link_libraries(ipc_server PRIVATE aux_augins)
 endif()

@@ -4,12 +4,12 @@
   SPDX-License-Identifier: BSL-1.0
 -->
 <resources>
-    <string name="augins_title">Augmented Insanity â€” GRS Test</string>
+    <string name="augins_title">Augmented Insanity -- GRS Test</string>
     <string name="augins_state_label">State: %1$s</string>
     <string name="augins_path_label">Modules dir:\n%1$s</string>
     <string name="augins_btn_start">Start GRS</string>
     <string name="augins_btn_stop">Stop GRS</string>
     <string name="augins_btn_refresh">Refresh</string>
     <string name="augins_modules_header">Loaded modules</string>
-    <string name="augins_no_modules">(none yet â€” drop a .augins into the modules dir, then Start GRS)</string>
+    <string name="augins_no_modules">(none yet -- drop a .augins into the modules dir, then Start GRS)</string>
 </resources>

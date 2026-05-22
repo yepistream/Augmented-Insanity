@@ -3,7 +3,7 @@
 #
 # Aug-Ins ARCore head-pose sample .augins module.
 #
-# Standalone Ã¢â‚¬â€ does NOT participate in the main Aug-Ins CMake build. The
+# Standalone -- does NOT participate in the main Aug-Ins CMake build. The
 # wrapping samples/augins-arcore-headpose/build.gradle invokes the NDK
 # toolchain directly and zips the result into arcore-headpose.augins.
 
@@ -13,11 +13,11 @@ project(augins-arcore-headpose LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Path to the runtime headers we need to share with the host process.
-# Module authors normally include only augins_module_abi.h, which transitively
-# pulls in xrt/xrt_defines.h (xrt_pose, xrt_quat, xrt_space_relation, etc.).
+# Path to the v0.2 public module ABI header. Module authors include
+# only "module_abi.h"; XrSpaceLocation etc. come from <openxr/openxr.h>.
+# The xrt/xrt_handles.h path is only here for the vendored arcore_instance.h
+# shim, not for the module .cpp itself.
 set(AUG_RUNTIME_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../../src/xrt/augins")
-set(XRT_PUBLIC_INCLUDE  "${CMAKE_CURRENT_SOURCE_DIR}/../../src/xrt/include")
 set(OPENXR_INCLUDE      "${CMAKE_CURRENT_SOURCE_DIR}/../../src/external/openxr_includes")
 
 # Vendored ARCore SDK + the user's tiny ARCore wrapper.
@@ -40,8 +40,7 @@ add_library(arcore_headpose_module SHARED
 target_include_directories(arcore_headpose_module PRIVATE
     ${VENDOR_DIR}            # arcore_c_api.h, arcore_instance.h
     ${VENDOR_DIR}/xrt        # xrt_handles.h shim used by arcore_instance.cpp
-    ${AUG_RUNTIME_INCLUDE}   # augins_module_abi.h
-    ${XRT_PUBLIC_INCLUDE}    # xrt/xrt_defines.h (pulled in by module ABI)
+    ${AUG_RUNTIME_INCLUDE}   # module_abi.h
     ${OPENXR_INCLUDE}        # <openxr/openxr.h>
     )
 
@@ -50,7 +49,7 @@ target_link_libraries(arcore_headpose_module PRIVATE
     android log EGL GLESv2
     )
 
-# The .augins loader does dlopen("<module_id>.so", ...) Ã¢â‚¬â€ output filename must
+# The .augins loader does dlopen("<module_id>.so", ...) -- output filename must
 # be exactly <ID from metadata.json>.so, no "lib" prefix.
 set_target_properties(arcore_headpose_module PROPERTIES
     PREFIX ""

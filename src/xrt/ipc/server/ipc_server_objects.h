@@ -1,5 +1,5 @@
 // Copyright 2025-2026, Marko Kazimirovic <kazimirovicmarko@photon.me>
-// SPDX-License-Identifier: BSL-1.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 /*!
  * @file
  * @brief Tracking objects to IDs.
@@ -10,6 +10,9 @@
 #pragma once
 
 #include "xrt/xrt_results.h"
+
+#include <stdbool.h>
+#include <stdint.h>
 
 struct ipc_client_state;
 
@@ -49,6 +52,18 @@ ipc_server_objects_get_xdev_and_validate(volatile struct ipc_client_state *ics,
  */
 xrt_result_t
 ipc_server_objects_get_xdev_id_or_add(volatile struct ipc_client_state *ics, struct xrt_device *xdev, uint32_t *out_id);
+
+/*!
+ * Aug-Ins helper. Test whether the xdev at the given ID is the same
+ * pointer as the system's static head role. Used by the v0.2 service
+ * adapter `aug_adapter_space_locate_device` to filter module dispatch
+ * to head-pose queries only. Safe on bad inputs (returns false; never
+ * fatal); intended for fast use on the hot IPC dispatch path.
+ *
+ * @ingroup ipc_server
+ */
+bool
+ipc_server_xdev_is_head_role(volatile struct ipc_client_state *ics, uint32_t id);
 
 
 /*!
